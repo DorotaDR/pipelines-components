@@ -253,7 +253,7 @@ class TestAutomlDataLoaderUnitTests:
     def test_component_random_sampling_deterministic(self, tmp_path):
         """Test that random sampling with fixed random_state is reproducible.
 
-        Use a large BYTES_PER_ROW so the mock reports >1GB for few rows, triggering
+        Use a large BYTES_PER_ROW so the mock reports >100MB for few rows, triggering
         _sample_random's downsampling. Otherwise no sample() call runs and the test
         would trivially pass without exercising the seed logic.
         """
@@ -264,8 +264,8 @@ class TestAutomlDataLoaderUnitTests:
 
         original_bytes_per_row = MockedDataFrame.BYTES_PER_ROW
         try:
-            # 5 rows * 500M bytes/row = 2.5GB > 1GB limit -> triggers random downsampling
-            MockedDataFrame.BYTES_PER_ROW = 500_000_000
+            # 5 rows * 50M bytes/row = 250MB > 100MB limit -> triggers random downsampling
+            MockedDataFrame.BYTES_PER_ROW = 50_000_000
 
             with _mock_boto3_and_pandas(get_object_side_effect=get_object):
                 sampled_test1 = _make_test_artifact(tmp_path, "test1.csv")
@@ -290,7 +290,7 @@ class TestAutomlDataLoaderUnitTests:
             n1 = result1.sample_config["n_samples"]
             n2 = result2.sample_config["n_samples"]
             assert n1 == n2, "Same random_state should yield same sample size"
-            assert n1 == 2, "Downsampling should have been triggered (2 rows * 0.5 GB/row = 1 GB)"
+            assert n1 == 2, "Downsampling should have been triggered (5 rows * 50 MB/row > 100 MB)"
         finally:
             MockedDataFrame.BYTES_PER_ROW = original_bytes_per_row
 

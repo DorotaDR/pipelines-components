@@ -7,7 +7,7 @@ from kfp import dsl
 @dsl.component(
     base_image="registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:f9844dc150592a9f196283b3645dda92bd80dfdb3d467fa8725b10267ea5bdbc",
     packages_to_install=[
-        "ai4rag@git+https://github.com/IBM/ai4rag.git",
+        "ai4rag~=0.5.2",
         "pyyaml",
         "pysqlite3-binary",  # ChromaDB requires sqlite3 >= 3.35; base image has older sqlite
         "llama-stack-client",
@@ -26,7 +26,7 @@ def rag_templates_optimization(
     chat_model_token: Optional[str] = None,
     embedding_model_url: Optional[str] = None,
     embedding_model_token: Optional[str] = None,
-    llama_stack_vector_database_id: Optional[str] = "ls_milvus",
+    llama_stack_vector_io_provider_id: Optional[str] = None,
     optimization_settings: Optional[dict] = None,
     input_data_key: Optional[str] = "",
 ):
@@ -57,7 +57,7 @@ def rag_templates_optimization(
 
         embedding_model_token: Optional API token for the embedding model endpoint. Omit if no auth.
 
-        llama_stack_vector_database_id: Vector database identifier as registered in llama-stack.
+        llama_stack_vector_io_provider_id: Vector I/O provider identifier as registered in llama-stack.
 
         optimization_settings: Additional settings customising the experiment.
 
@@ -113,8 +113,6 @@ def rag_templates_optimization(
     MAX_NUMBER_OF_RAG_PATTERNS_ALLOWED_RANGE = (4, 20)
     METRIC = "faithfulness"
     SUPPORTED_OPTIMIZATION_METRICS = frozenset({"faithfulness", "answer_correctness", "context_correctness"})
-    SUPPORTED_VS_TYPES = ("ls_milvus",)
-
     _ssl_logger = logging.getLogger(__name__)
 
     def _is_ssl_error(exc: BaseException) -> bool:
@@ -164,12 +162,6 @@ def rag_templates_optimization(
             else:
                 raise
         return client
-
-    if llama_stack_vector_database_id and llama_stack_vector_database_id not in SUPPORTED_VS_TYPES:
-        raise ValueError(
-            f"llama_stack_vector_database_id {llama_stack_vector_database_id} is not supported,"
-            f" supported types are {SUPPORTED_VS_TYPES}."
-        )
 
     if not isinstance(test_data_key, str) or not test_data_key.strip() or not test_data_key.lower().endswith(".json"):
         raise ValueError("test_data_path must point to a JSON file")
@@ -680,10 +672,23 @@ def rag_templates_optimization(
 
     benchmark_data = pd.read_json(Path(test_data))
 
-    if not llama_stack_vector_database_id and in_memory_vector_store_scenario:
-        llama_stack_vector_database_id = "chroma"
-    elif not llama_stack_vector_database_id:
-        llama_stack_vector_database_id = "ls_milvus"
+    if not llama_stack_vector_io_provider_id or not llama_stack_vector_io_provider_id.strip():
+        if in_memory_vector_store_scenario:
+            llama_stack_vector_io_provider_id = "chroma"
+        else:
+            raise ValueError(
+                "llama_stack_vector_io_provider_id must be provided when using llama-stack vector database."
+            )
+
+    # ai4rag expects vector_store_type with an "ls_" prefix for llama-stack providers.
+    # Users provide the raw llama-stack provider_id (e.g. "milvus"); the prefix is added here.
+    # If the user already included "ls_", don't double-prefix.
+    if in_memory_vector_store_scenario:
+        vector_store_type = llama_stack_vector_io_provider_id
+    elif llama_stack_vector_io_provider_id.startswith("ls_"):
+        vector_store_type = llama_stack_vector_io_provider_id
+    else:
+        vector_store_type = f"ls_{llama_stack_vector_io_provider_id}"
 
     rag_exp = AI4RAGExperiment(
         client=None if in_memory_vector_store_scenario else client.llama_stack,
@@ -691,7 +696,7 @@ def rag_templates_optimization(
         optimizer_settings=optimizer_settings,
         search_space=search_space,
         benchmark_data=benchmark_data,
-        vector_store_type=llama_stack_vector_database_id,
+        vector_store_type=vector_store_type,
         documents=documents,
         optimization_metric=optimization_metric,
         # TODO some necessary kwargs (if any at all)
@@ -775,7 +780,7 @@ def rag_templates_optimization(
                 "vector_store": {
                     "datasource_type": idx.get("vector_store", {}).get("datasource_type")
                     or rp.get("vector_store", {}).get("datasource_type")
-                    or "ls_milvus",
+                    or vector_store_type,
                     "collection_name": getattr(evaluation_result, "collection", "") or "",
                 },
                 "chunking": {
@@ -832,7 +837,7 @@ def rag_templates_optimization(
         patt_dir.mkdir(parents=True, exist_ok=True)
 
         pattern_data = _build_pattern_json(eval, iteration=i, max_combinations=max_combinations)
-        if llama_stack_vector_database_id == "chroma":
+        if llama_stack_vector_io_provider_id == "chroma":
             generate_notebook_from_templates(
                 "chroma",
                 pattern_data,

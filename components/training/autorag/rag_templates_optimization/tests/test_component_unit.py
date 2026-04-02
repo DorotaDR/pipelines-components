@@ -198,24 +198,98 @@ class TestRagTemplatesOptimizationUnitTests:
                     optimization_settings={"metric": "faithfulness", "max_number_of_rag_patterns": 8},
                 )
 
-    def test_invalid_vector_store_id_raises_value_error(self):
-        """Unsupported llama_stack_vector_database_id raises ValueError."""
-        with mock.patch.dict(sys.modules, _minimal_dependency_modules()):
-            with pytest.raises(ValueError, match="is not supported"):
-                rag_templates_optimization.python_func(
-                    extracted_text="/tmp/extracted",
-                    test_data="/tmp/test_data.json",
-                    search_space_prep_report="/tmp/report.yml",
-                    rag_patterns=mock.MagicMock(path="/tmp/rag_patterns", metadata={}, uri=""),
-                    embedded_artifact=mock.MagicMock(path="/tmp/embedded"),
-                    test_data_key="small-dataset/benchmark.json",
-                    chat_model_url="https://chat",
-                    chat_model_token="token",
-                    embedding_model_url="https://emb",
-                    embedding_model_token="token",
-                    llama_stack_vector_database_id="unsupported_vs",
-                    optimization_settings={"metric": "faithfulness", "max_number_of_rag_patterns": 8},
-                )
+    def _setup_llama_stack_mocks(self, tmp_path, abort_at_experiment=True):
+        """Set up mocks and temp files for llama-stack (non-in-memory) vector store tests.
+
+        Returns (mocks, extracted_text, test_data_path, search_space_report).
+        """
+        mocks = _make_all_mocks()
+        llama_mod = _make_llama_stack_client_module()
+        mock_ls = mock.MagicMock()
+        mock_ls.models.list.return_value = []
+        llama_mod.LlamaStackClient.return_value = mock_ls
+        mocks["llama_stack_client"] = llama_mod
+        mocks["openai"] = _make_openai_module()
+        if abort_at_experiment:
+            mocks["ai4rag.core.experiment.experiment"].AI4RAGExperiment.side_effect = _SentinelAbort
+
+        search_space_report = tmp_path / "report.yml"
+        search_space_report.write_text("{}")
+        test_data_path = tmp_path / "test_data.json"
+        test_data_path.write_text("[]")
+        extracted_text = str(tmp_path / "extracted_text")
+
+        return mocks, extracted_text, str(test_data_path), str(search_space_report)
+
+    def _run_with_llama_stack(self, mocks, extracted_text, test_data, search_space_report, **kwargs):
+        """Run the component with llama-stack env vars and the given mocks."""
+        with (
+            mock.patch.dict(sys.modules, mocks),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "LLAMA_STACK_CLIENT_BASE_URL": "https://llama-stack.example.com",
+                    "LLAMA_STACK_CLIENT_API_KEY": "test-api-key",
+                },
+            ),
+        ):
+            defaults = {
+                "extracted_text": extracted_text,
+                "test_data": test_data,
+                "search_space_prep_report": search_space_report,
+                "rag_patterns": mock.MagicMock(path="/tmp/rag_patterns", metadata={}, uri=""),
+                "embedded_artifact": mock.MagicMock(path="/tmp/embedded"),
+                "test_data_key": "small-dataset/benchmark.json",
+                "optimization_settings": {"metric": "faithfulness", "max_number_of_rag_patterns": 8},
+            }
+            defaults.update(kwargs)
+            rag_templates_optimization.python_func(**defaults)
+
+    def test_any_vector_store_id_is_accepted(self, tmp_path):
+        """Any non-empty llama_stack_vector_io_provider_id string is accepted (no allowlist)."""
+        mocks, extracted_text, test_data, report = self._setup_llama_stack_mocks(tmp_path)
+        with pytest.raises(_SentinelAbort):
+            self._run_with_llama_stack(
+                mocks, extracted_text, test_data, report, llama_stack_vector_io_provider_id="my_custom_milvus"
+            )
+
+    def test_ls_prefix_added_for_non_in_memory_scenario(self, tmp_path):
+        """AI4RAGExperiment receives vector_store_type with 'ls_' prefix when not in-memory."""
+        mocks, extracted_text, test_data, report = self._setup_llama_stack_mocks(tmp_path)
+        with pytest.raises(_SentinelAbort):
+            self._run_with_llama_stack(
+                mocks, extracted_text, test_data, report, llama_stack_vector_io_provider_id="milvus"
+            )
+
+        ai4rag_exp = mocks["ai4rag.core.experiment.experiment"].AI4RAGExperiment
+        ai4rag_exp.assert_called_once()
+        assert ai4rag_exp.call_args.kwargs["vector_store_type"] == "ls_milvus"
+
+    def test_ls_prefix_not_doubled(self, tmp_path):
+        """When user provides a value already prefixed with 'ls_', it is not doubled."""
+        mocks, extracted_text, test_data, report = self._setup_llama_stack_mocks(tmp_path)
+        with pytest.raises(_SentinelAbort):
+            self._run_with_llama_stack(
+                mocks, extracted_text, test_data, report, llama_stack_vector_io_provider_id="ls_milvus"
+            )
+
+        ai4rag_exp = mocks["ai4rag.core.experiment.experiment"].AI4RAGExperiment
+        ai4rag_exp.assert_called_once()
+        assert ai4rag_exp.call_args.kwargs["vector_store_type"] == "ls_milvus"
+
+    def test_missing_provider_id_non_in_memory_raises_value_error(self, tmp_path):
+        """None provider_id in non-in-memory (llama-stack) mode raises ValueError."""
+        mocks, extracted_text, test_data, report = self._setup_llama_stack_mocks(tmp_path, abort_at_experiment=False)
+        with pytest.raises(ValueError, match="llama_stack_vector_io_provider_id must be provided"):
+            self._run_with_llama_stack(mocks, extracted_text, test_data, report, llama_stack_vector_io_provider_id=None)
+
+    def test_whitespace_provider_id_non_in_memory_raises_value_error(self, tmp_path):
+        """Whitespace-only provider_id in non-in-memory (llama-stack) mode raises ValueError."""
+        mocks, extracted_text, test_data, report = self._setup_llama_stack_mocks(tmp_path, abort_at_experiment=False)
+        with pytest.raises(ValueError, match="llama_stack_vector_io_provider_id must be provided"):
+            self._run_with_llama_stack(
+                mocks, extracted_text, test_data, report, llama_stack_vector_io_provider_id="   "
+            )
 
     def test_max_number_of_rag_patterns_non_numeric_string_raises_value_error(self):
         """UI may pass string parameters; non-numeric strings are rejected with a clear error."""
@@ -274,6 +348,7 @@ class TestRagTemplatesOptimizationUnitTests:
                     rag_patterns=rag_patterns,
                     embedded_artifact=embedded_artifact,
                     test_data_key="small-dataset/benchmark.json",
+                    llama_stack_vector_io_provider_id="milvus",
                     optimization_settings={"metric": "faithfulness", "max_number_of_rag_patterns": "8"},
                 )
 

@@ -26,7 +26,7 @@ def automl_data_loader(  # noqa: D417
 ):
     """Automl Data Loader component.
 
-    Loads tabular (CSV) data from S3 in batches, sampling up to 1GB of data,
+    Loads tabular (CSV) data from S3 in batches, sampling up to 100 MB of data,
     then splits the sampled data into test, selection-train, and extra-train sets.
 
     The component reads data in chunks to efficiently handle large files without
@@ -73,7 +73,7 @@ def automl_data_loader(  # noqa: D417
 
     logger = logging.getLogger(__name__)
 
-    MAX_SIZE_BYTES = 1024 * 1024 * 1024  # 1GB limit in bytes
+    MAX_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB limit in bytes
     PANDAS_CHUNK_SIZE = 10000  # Rows per batch for streaming read
     DEFAULT_RANDOM_STATE = 42
     VALID_SAMPLING_METHODS = {"first_n_rows", "stratified", "random"}

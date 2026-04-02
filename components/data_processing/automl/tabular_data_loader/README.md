@@ -6,7 +6,7 @@
 
 Automl Data Loader component.
 
-Loads tabular (CSV) data from S3 in batches, sampling up to 1GB of data, then splits the sampled data into test, selection-train, and extra-train sets.
+Loads tabular (CSV) data from S3 in batches, sampling up to 100 MB of data, then splits the sampled data into test, selection-train, and extra-train sets.
 
 The component reads data in chunks to efficiently handle large files without loading the entire dataset into memory at once. After sampling, it performs a two-stage split:
 
@@ -47,7 +47,7 @@ Authentication uses AWS-style credentials provided via environment variables (e.
     - Name: Pipelines, Version: >=2.15.2
 - **Tags**:
   - data-processing
-- **Last Verified**: 2026-03-12 19:53:22+00:00
+- **Last Verified**: 2026-04-02 00:00:00+00:00
 - **Owners**:
   - Approvers:
     - LukaszCmielowski
@@ -60,7 +60,7 @@ Authentication uses AWS-style credentials provided via environment variables (e.
 
 Available values for the `sampling_method` parameter are:
 
-- `"first_n_rows"`: Reads the first N rows from the file up to the component's memory limit (default 1GB).
+- `"first_n_rows"`: Reads the first N rows from the file up to the component's memory limit (default 100 MB).
 - `"stratified"`: Samples the dataset in a way that preserves the distribution of the `label_column`. Only available if `label_column` is specified and task type is classification.
 - `"random"`: Randomly samples rows from the dataset up to the size limit.
 
@@ -172,7 +172,7 @@ load_task = automl_data_loader(
 ## Supported formats and limits 📋
 
 - **Format**: CSV only.
-- **Size limit**: Up to 1GB of data in memory (sampled if larger).
+- **Size limit**: Up to 100 MB of data in memory (sampled if larger).
 - **Streaming**: Data is read in batches (10k rows per chunk) to handle large files.
 
 ## Logging 📝

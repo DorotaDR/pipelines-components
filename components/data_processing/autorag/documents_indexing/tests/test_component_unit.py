@@ -112,18 +112,18 @@ class TestDocumentsIndexingUnitTests:
         params = list(sig.parameters)
         assert "embedding_model_id" in params
         assert "extracted_text" in params
-        assert "llama_stack_vector_database_id" in params
+        assert "llama_stack_vector_io_provider_id" in params
 
-    def test_invalid_vector_store_type_raises_value_error(self, tmp_path):
-        """Unsupported llama_stack_vector_database_id raises ValueError."""
+    def test_empty_vector_store_type_raises_value_error(self, tmp_path):
+        """Empty llama_stack_vector_io_provider_id raises ValueError."""
         mods, _ = _patch_indexing_dependencies()
         extracted = mock.MagicMock(path=str(tmp_path))
         with mock.patch.dict(sys.modules, mods):
-            with pytest.raises(ValueError, match="is not supported"):
+            with pytest.raises(ValueError, match="llama_stack_vector_io_provider_id must be a non-empty string"):
                 documents_indexing.python_func(
                     embedding_model_id="embed-model",
                     extracted_text=extracted,
-                    llama_stack_vector_database_id="unsupported",
+                    llama_stack_vector_io_provider_id="",
                 )
 
     def test_empty_embedding_model_id_raises_value_error(self, tmp_path):
@@ -135,7 +135,7 @@ class TestDocumentsIndexingUnitTests:
                 documents_indexing.python_func(
                     embedding_model_id="",
                     extracted_text=extracted,
-                    llama_stack_vector_database_id="ls_milvus",
+                    llama_stack_vector_io_provider_id="milvus",
                 )
 
     def test_invalid_chunk_size_type_raises_type_error(self, tmp_path):
@@ -147,7 +147,7 @@ class TestDocumentsIndexingUnitTests:
                 documents_indexing.python_func(
                     embedding_model_id="embed-model",
                     extracted_text=extracted,
-                    llama_stack_vector_database_id="ls_milvus",
+                    llama_stack_vector_io_provider_id="milvus",
                     chunk_size="1024",
                 )
 
@@ -196,7 +196,7 @@ class TestSSLFallbackDocumentsIndexing:
             documents_indexing.python_func(
                 embedding_model_id="granite-embedding",
                 extracted_text=extracted_text,
-                llama_stack_vector_database_id="ls_milvus",
+                llama_stack_vector_io_provider_id="ls_milvus",
             )
 
         assert ls_call_count == 2, "LlamaStackClient should be instantiated twice (initial + SSL retry)"
@@ -249,7 +249,7 @@ class TestSSLFallbackDocumentsIndexing:
             documents_indexing.python_func(
                 embedding_model_id="granite-embedding",
                 extracted_text=extracted_text,
-                llama_stack_vector_database_id="ls_milvus",
+                llama_stack_vector_io_provider_id="ls_milvus",
             )
 
         assert ls_call_count == 2, "LlamaStackClient should be instantiated twice (initial + SSL retry)"
@@ -280,7 +280,7 @@ class TestSSLFallbackDocumentsIndexing:
                 documents_indexing.python_func(
                     embedding_model_id="granite-embedding",
                     extracted_text=extracted_text,
-                    llama_stack_vector_database_id="ls_milvus",
+                    llama_stack_vector_io_provider_id="milvus",
                 )
 
     @mock.patch.dict(
@@ -310,7 +310,7 @@ class TestSSLFallbackDocumentsIndexing:
                 documents_indexing.python_func(
                     embedding_model_id="granite-embedding",
                     extracted_text=extracted_text,
-                    llama_stack_vector_database_id="ls_milvus",
+                    llama_stack_vector_io_provider_id="milvus",
                 )
 
     @mock.patch.dict(
@@ -337,7 +337,7 @@ class TestSSLFallbackDocumentsIndexing:
             documents_indexing.python_func(
                 embedding_model_id="granite-embedding",
                 extracted_text=extracted_text,
-                llama_stack_vector_database_id="ls_milvus",
+                llama_stack_vector_io_provider_id="ls_milvus",
             )
 
         # LSVectorStore.add_documents should never be called if no documents found
@@ -379,7 +379,7 @@ class TestSSLFallbackDocumentsIndexing:
             documents_indexing.python_func(
                 embedding_model_id="granite-embedding",
                 extracted_text=extracted_text,
-                llama_stack_vector_database_id="ls_milvus",
+                llama_stack_vector_io_provider_id="ls_milvus",
                 batch_size=2,
             )
 

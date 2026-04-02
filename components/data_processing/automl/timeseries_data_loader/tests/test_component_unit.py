@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from ..component import timeseries_data_loader
-from .mocked_pandas import make_mocked_pandas_module
+from .mocked_pandas import MockedDataFrame, make_mocked_pandas_module
 
 mocked_env_variables = {
     "AWS_ACCESS_KEY_ID": "test_key",
@@ -207,6 +207,33 @@ class TestTimeseriesDataLoaderUnitTests:
         assert isinstance(parsed, list)
         assert len(parsed) == 5
         assert parsed[-1]["target"] == "29"
+
+    @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
+    def test_sampling_truncates_to_100mb_cap(self, tmp_path):
+        """Sampling truncates rows when the mocked total exceeds the 100 MB limit."""
+        body_stream = io.BytesIO(_timeseries_csv(3).encode("utf-8"))
+        sampled_test = _make_test_artifact(tmp_path)
+
+        original_bytes_per_row = MockedDataFrame.BYTES_PER_ROW
+        try:
+            # 3 rows * 60 MB/row = 180 MB, so truncation should keep only 1 row under 100 MB.
+            MockedDataFrame.BYTES_PER_ROW = 60_000_000
+            with _mock_boto3_and_pandas(get_object_return={"Body": body_stream}):
+                result = timeseries_data_loader.python_func(
+                    file_key="timeseries/train.csv",
+                    bucket_name="my-bucket",
+                    workspace_path=str(tmp_path),
+                    target="target",
+                    id_column="item_id",
+                    timestamp_column="timestamp",
+                    sampled_test_dataset=sampled_test,
+                )
+        finally:
+            MockedDataFrame.BYTES_PER_ROW = original_bytes_per_row
+
+        assert result.sample_config["sampling_method"] == "first_n_rows"
+        assert result.sample_config["total_rows_loaded"] == 1
+        assert result.sample_config["sampled_rows"] == 1
 
     @mock.patch.dict(os.environ, mocked_env_variables, clear=True)
     def test_no_data_rows_raises(self, tmp_path):

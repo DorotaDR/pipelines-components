@@ -22,12 +22,12 @@ The system integrates with llama-stack API for inference and vector database ope
 | `input_data_secret_name` | `str` | `None` | Name of the Kubernetes secret holding S3-compatible credentials for input document data access. The following environment variables are required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_DEFAULT_REGION. |
 | `input_data_bucket_name` | `str` | `None` | S3 (or compatible) bucket name for the input documents. |
 | `llama_stack_secret_name` | `str` | `None` | Name of the Kubernetes secret for llama-stack API connection. The secret must define: LLAMA_STACK_CLIENT_API_KEY, LLAMA_STACK_CLIENT_BASE_URL. |
+| `llama_stack_vector_io_provider_id` | `str` | `None` | Vector I/O provider id (e.g., registered in llama-stack Milvus). |
 | `input_data_key` | `str` | `""` | Object key (path) of the input documents in the input data bucket. |
 | `embeddings_models` | `Optional[List]` | `None` | Optional list of embedding model identifiers to use in the search space. |
 | `generation_models` | `Optional[List]` | `None` | Optional list of foundation/generation model identifiers to use in the search space. |
 | `optimization_metric` | `str` | `faithfulness` | Quality metric used to optimize RAG patterns. Supported values: "faithfulness", "answer_correctness", "context_correctness". |
 | `optimization_max_rag_patterns` | `int` | `8` | Maximum number of RAG patterns to generate. Passed to ai4rag (max_number_of_rag_patterns). Defaults to 8. |
-| `llama_stack_vector_database_id` | `Optional[str]` | `None` | Optional vector database id (e.g., registered in llama-stack Milvus). If not provided, an in-memory database may be used. |
 
 ## Metadata 🗂️
 

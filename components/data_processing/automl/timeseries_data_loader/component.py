@@ -25,7 +25,7 @@ def timeseries_data_loader(
 ):
     """Load and split timeseries data from S3 for AutoGluon training.
 
-    This component loads time series data from S3, samples it (up to 1GB),
+    This component loads time series data from S3, samples it (up to 100 MB),
     and performs a two-stage **per-series temporal** split for efficient AutoGluon training:
     1. Primary split (default 80/20): for each distinct ``id_column`` value, the earliest
        (1 - test_size) fraction of rows by ``timestamp_column`` goes to the train portion and
@@ -60,7 +60,7 @@ def timeseries_data_loader(
 
     logger = logging.getLogger(__name__)
 
-    MAX_SIZE_BYTES = 1024 * 1024 * 1024  # 1GB limit in bytes
+    MAX_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB limit in bytes
     PANDAS_CHUNK_SIZE = 10000  # Rows per batch for streaming read
     DEFAULT_TEST_SIZE = 0.2
 

@@ -22,7 +22,7 @@ Carries out the iterative RAG optimization process.
 | `chat_model_token` | `Optional[str]` | `None` | Optional API token for the chat model endpoint. Omit if deployment has no auth. |
 | `embedding_model_url` | `Optional[str]` | `None` | Inference endpoint URL for the embedding model. Required for in-memory scenario. |
 | `embedding_model_token` | `Optional[str]` | `None` | Optional API token for the embedding model endpoint. Omit if no auth. |
-| `llama_stack_vector_database_id` | `Optional[str]` | `ls_milvus` | Vector database identifier as registered in llama-stack. |
+| `llama_stack_vector_io_provider_id` | `Optional[str]` | `None` | Vector I/O provider identifier as registered in llama-stack. |
 | `optimization_settings` | `Optional[dict]` | `None` | Additional settings customising the experiment. |
 | `input_data_key` | `Optional[str]` | `""` | A path to documents dir within a bucket used as an input to AI4RAG experiment. |
 

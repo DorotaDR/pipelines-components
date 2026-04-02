@@ -6,7 +6,7 @@
 
 Load and split timeseries data from S3 for AutoGluon training.
 
-This component loads time series data from S3, samples it (up to 1GB), and performs a two-stage **per-series temporal** split for efficient AutoGluon training: 1. Primary split (default 80/20): for each distinct ``id_column`` value, the earliest (1 - test_size) fraction of rows by
+This component loads time series data from S3, samples it (up to 100 MB), and performs a two-stage **per-series temporal** split for efficient AutoGluon training: 1. Primary split (default 80/20): for each distinct ``id_column`` value, the earliest (1 - test_size) fraction of rows by
 ``timestamp_column`` goes to the train portion and the remainder to the test set (so every series with at least two rows contributes holdout data; single-row series stay in train only). 2. Secondary split (default 30/70 of each series' train rows): early segment to selection-train, later segment to
 extra-train.
 
@@ -43,7 +43,7 @@ The test set is written to S3 artifact, while train CSVs are written to the PVC 
   - timeseries
   - automl
   - data-loading
-- **Last Verified**: 2026-03-24 13:42:00+00:00
+- **Last Verified**: 2026-04-02 00:00:00+00:00
 - **Owners**:
   - Approvers:
     - LukaszCmielowski

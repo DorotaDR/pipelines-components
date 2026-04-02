@@ -14,7 +14,7 @@ Reads markdown files from extracted_text, chunks them, embeds via Llama Stack, a
 | --------- | ---- | ------- | ----------- |
 | `embedding_model_id` | `str` | `None` | Embedding model ID used for the vector store. |
 | `extracted_text` | `dsl.Input[dsl.Artifact]` | `None` | Input artifact (folder) containing .md files from text extraction. |
-| `llama_stack_vector_database_id` | `str` | `None` | Llama Stack provider ID for the vector database. |
+| `llama_stack_vector_io_provider_id` | `str` | `None` | Llama Stack provider ID for the vector database. |
 | `embedding_params` | `Optional[dict]` | `None` | Optional embedding parameters. |
 | `distance_metric` | `str` | `cosine` | Vector distance metric (e.g. "cosine"). |
 | `chunking_method` | `str` | `recursive` | Chunking method. |

@@ -14,7 +14,7 @@ from kfp_components.components.data_processing.autorag.text_extraction.component
 def documents_indexing_pipeline(
     llama_stack_secret_name: str,
     embedding_model_id: str,
-    llama_stack_vector_database_id: str,
+    llama_stack_vector_io_provider_id: str,
     input_data_secret_name: str,
     input_data_bucket_name: str,
     input_data_key: Optional[str] = None,
@@ -32,7 +32,7 @@ def documents_indexing_pipeline(
         llama_stack_secret_name: Name of the secret with LLAMA stack credentials
             ("LLAMA_STACK_CLIENT_BASE_URL", "LLAMA_STACK_CLIENT_API_KEY").
         embedding_model_id: Embedding model ID for the vector store.
-        llama_stack_vector_database_id: Optional Llama Stack provider ID.
+        llama_stack_vector_io_provider_id: Optional Llama Stack provider ID.
         input_data_secret_name: Name of the secret with S3 credentials for input data
             ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_DEFAULT_REGION").
         input_data_bucket_name: Name of the S3 bucket containing input data.
@@ -58,7 +58,7 @@ def documents_indexing_pipeline(
         embedding_params=embedding_params,
         embedding_model_id=embedding_model_id,
         extracted_text=text_extraction_task.outputs["extracted_text"],
-        llama_stack_vector_database_id=llama_stack_vector_database_id,
+        llama_stack_vector_io_provider_id=llama_stack_vector_io_provider_id,
         distance_metric=distance_metric,
         chunking_method=chunking_method,
         chunk_size=chunk_size,
