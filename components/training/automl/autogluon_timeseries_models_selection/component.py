@@ -61,7 +61,7 @@ def autogluon_timeseries_models_selection(
     DEFAULT_EVAL_METRIC = "MASE"
     DEFAULT_TIME_LIMIT = 600  # 10 minutes
 
-    TOP_N_MAX = 10
+    TOP_N_MAX = 7
 
     # Input validation
     for param, value in (
