@@ -7,6 +7,7 @@ torch==2.10.0
 xgboost==3.2.0
 scikit-learn==1.7.2
 autogluon.tabular==1.5.0
+autogluon.timeseries==1.5.0+rhaiv.1
 fastai==2.8.7
 autogluon.core==1.5.0
 autogluon.common==1.5.0
