@@ -19,5 +19,16 @@
     "prediction_length": 10,
     "top_n": 2,
     "tags": ["smoke", "timeseries"]
+  },
+  {
+    "id": "m4_daily_weekend_non_default_columns",
+    "dataset_path": "data/m4_daily_with_weekend_non_default_columns.csv",
+    "target": "target_value",
+    "id_column": "d_id",
+    "timestamp_column": "date",
+    "known_covariates_names": ["weekend"],
+    "prediction_length": 7,
+    "top_n": 5,
+    "tags": ["timeseries", "known_covariates_included"]
   }
 ]
