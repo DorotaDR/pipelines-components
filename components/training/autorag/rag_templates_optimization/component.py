@@ -356,7 +356,7 @@ def rag_templates_optimization(
             notebook_name: Literal[
                 "ls_indexing_template.ipynb",
                 "ls_inference_template.ipynb",
-                "chroma_teamplate.ipynb",
+                "chroma_template.ipynb",
             ],
         ) -> "Notebook":
             """Load a Jupyter notebook from a file.

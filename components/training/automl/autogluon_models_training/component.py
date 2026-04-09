@@ -2,7 +2,10 @@ import pathlib
 from typing import NamedTuple, Optional
 
 from kfp import dsl
-from kfp_components.utils.consts import AUTOML_IMAGE  # pyright: ignore[reportMissingImports]
+from kfp_components.utils.consts import (  # pyright: ignore[reportMissingImports]
+    AUTOML_IMAGE,
+    REDHAT_INDEX_URL,
+)
 
 # Reuse notebook templates from autogluon_models_full_refit
 _NOTEBOOKS_DIR = str(pathlib.Path(__file__).parent / "notebook_templates")
@@ -256,6 +259,7 @@ def autogluon_models_training(
             "<REPLACE_PIPELINE_NAME>": pipeline_name_trimmed,
             "<REPLACE_MODEL_NAME>": model_name_full,
             "<REPLACE_SAMPLE_ROW>": str(sample_row_formatted),
+            "<REPLACE_PIP_EXTRA_INDEX_URL>": REDHAT_INDEX_URL,
         }
         notebook = replace_placeholder_in_notebook(notebook, replacements)
         notebook_path = output_path / "notebooks"
