@@ -10,7 +10,9 @@ This component aggregates metrics from a list of model artifacts produced by ``a
 
 Each artifact in ``models`` must have been produced by ``autogluon_timeseries_models_full_refit``, which writes the following layout under the artifact path::
 
-{artifact.path}/{model_name_full}/metrics/metrics.json {artifact.path}/{model_name_full}/predictor/ {artifact.path}/{model_name_full}/notebooks/
+{artifact.path}/{model_name_full}/metrics/metrics.json {artifact.path}/{model_name_full}/metrics/back_testing.json (optional) {artifact.path}/{model_name_full}/predictor/ {artifact.path}/{model_name_full}/notebooks/
+
+When ``back_testing.json`` is missing, empty, or invalid (e.g. series too short for rolling cutoffs), backtest columns show ``n/a`` and ``backtest_n`` is ``0``.
 
 Note: KFP does not propagate artifact metadata through executor inputs for collected artifact lists, so metrics are read from ``metrics/metrics.json`` on the filesystem rather than from ``artifact.metadata``.
 

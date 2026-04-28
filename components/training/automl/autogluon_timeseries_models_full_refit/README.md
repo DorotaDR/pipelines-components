@@ -9,6 +9,9 @@ Refit a single AutoGluon timeseries model on full training data.
 This component takes a model selected during the selection phase and refits it on the full training dataset (selection + extra train data) for improved performance. The refitted model is optimized and saved for deployment. Each model directory contains a ``model.json`` file with model metadata
 (name, base model, location, metrics).
 
+After refit, the pipeline hold-out ``test_dataset`` is scored once with :meth:`~autogluon.timeseries.TimeSeriesPredictor.evaluate` (final window). Additional **rolling backtests** reuse the same test frame with negative ``cutoff`` values spaced by ``prediction_length``, matching AutoGluon’s
+documented ``evaluate`` cutoff semantics. Results are written as ``metrics/back_testing.json`` (ADR-aligned summary structure).
+
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
@@ -26,6 +29,7 @@ This component takes a model selected during the selection phase and refits it o
 | `sample_rows` | `str` | `None` | Sample rows from test dataset as JSON string. |
 | `notebooks` | `dsl.EmbeddedInput[dsl.Dataset]` | `None` | Embedded notebook templates (injected by the runtime from the component's embedded_artifact_path). |
 | `model_artifact` | `dsl.Output[dsl.Model]` | `None` | Output artifact for the refitted model. |
+| `backtest_num_windows` | `int` | `3` | Number of rolling ``evaluate`` windows on ``test_dataset`` using ``cutoff=-k * prediction_length`` for ``k`` from ``backtest_num_windows`` down to ``1``. Must be >= 1. Backtest windows that cannot be evaluated (for example too-short series) are skipped with a warning. |
 
 ## Usage Examples 🧪
 

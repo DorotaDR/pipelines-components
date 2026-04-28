@@ -24,6 +24,7 @@ def autogluon_timeseries_models_full_refit(
     sample_rows: str,
     notebooks: dsl.EmbeddedInput[dsl.Dataset],
     model_artifact: dsl.Output[dsl.Model],
+    backtest_num_windows: int = 3,
 ):
     """Refit a single AutoGluon timeseries model on full training data.
 
@@ -32,6 +33,13 @@ def autogluon_timeseries_models_full_refit(
     for improved performance. The refitted model is optimized and saved
     for deployment. Each model directory contains a ``model.json`` file
     with model metadata (name, base model, location, metrics).
+
+    After refit, the pipeline hold-out ``test_dataset`` is scored once with
+    :meth:`~autogluon.timeseries.TimeSeriesPredictor.evaluate` (final window).
+    Additional **rolling backtests** reuse the same test frame with negative
+    ``cutoff`` values spaced by ``prediction_length``, matching AutoGluon’s
+    documented ``evaluate`` cutoff semantics. Results are written as
+    ``metrics/back_testing.json`` (ADR-aligned summary structure).
 
     Args:
         model_name: Name of the model to refit.
@@ -48,6 +56,10 @@ def autogluon_timeseries_models_full_refit(
         sample_rows: Sample rows from test dataset as JSON string.
         model_artifact: Output artifact for the refitted model.
         notebooks: Embedded notebook templates (injected by the runtime from the component's embedded_artifact_path).
+        backtest_num_windows: Number of rolling ``evaluate`` windows on ``test_dataset``
+            using ``cutoff=-k * prediction_length`` for ``k`` from ``backtest_num_windows``
+            down to ``1``. Must be >= 1. Backtest windows that cannot be evaluated
+            (for example too-short series) are skipped with a warning.
     """
     import json
     import logging
@@ -63,6 +75,9 @@ def autogluon_timeseries_models_full_refit(
     logger = logging.getLogger(__name__)
 
     logger.info("Timeseries refit: model=%s", model_name)
+
+    if backtest_num_windows < 1:
+        raise ValueError("backtest_num_windows must be >= 1")
 
     # Load the predictor from selection phase
     try:
@@ -153,12 +168,74 @@ def autogluon_timeseries_models_full_refit(
         logger.error("Failed to save predictor: %s", e)
         raise ValueError(f"Could not save predictor to {predictor_output}: {e}") from e
 
+    eval_metric_names = list(AVAILABLE_METRICS.keys())
+
+    def _metrics_to_json_dict(raw: dict) -> dict:
+        return {
+            k: float(v) if hasattr(v, "item") else v
+            for k, v in raw.items()
+            if not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
+        }
+
+    def _compute_overall_backtest_metrics(per_window_metrics: list[dict]) -> dict:
+        """Compute metric-wise means across successful backtest windows."""
+        metric_to_values: dict[str, list[float]] = {}
+        for entry in per_window_metrics:
+            for metric_name, metric_value in entry["metrics"].items():
+                if isinstance(metric_value, (int, float)):
+                    metric_to_values.setdefault(metric_name, []).append(float(metric_value))
+        return {name: sum(values) / len(values) for name, values in metric_to_values.items() if values}
+
     try:
-        metrics = predictor_refit.evaluate(test_ts_df, metrics=list(AVAILABLE_METRICS.keys()))
+        metrics = predictor_refit.evaluate(test_ts_df, metrics=eval_metric_names)
     except Exception as e:
         logger.error("Evaluation failed: %s", e)
         raise ValueError(f"Failed to evaluate model: {e}") from e
-    logger.debug("Evaluation metrics: %s", metrics)
+    logger.debug("Evaluation metrics (hold-out): %s", metrics)
+
+    prediction_length = int(model_config.get("prediction_length", 1))
+    per_window_metrics: list[dict] = []
+    skipped_backtest_windows: list[dict] = []
+    for k in range(backtest_num_windows, 0, -1):
+        cutoff = -k * prediction_length
+        try:
+            window_metrics = predictor_refit.evaluate(
+                test_ts_df,
+                metrics=eval_metric_names,
+                cutoff=cutoff,
+            )
+        except Exception as e:
+            logger.warning("Backtest evaluation skipped (cutoff=%s): %s", cutoff, e)
+            skipped_backtest_windows.append({"cutoff": cutoff, "reason": str(e)})
+            continue
+        sanitized_window_metrics = _metrics_to_json_dict(window_metrics)
+        per_window_metrics.append(
+            {
+                "window_id": backtest_num_windows - k,
+                "cutoff": cutoff,
+                "metrics": sanitized_window_metrics,
+            },
+        )
+        logger.debug("Backtest cutoff=%s metrics: %s", cutoff, window_metrics)
+
+    back_testing_summary = {
+        "model_name": model_name_full,
+        "prediction_length": prediction_length,
+        "num_val_windows": backtest_num_windows,
+        "eval_metric": model_config.get("eval_metric", "MASE"),
+        "target": model_config.get("target"),
+        "id_column": model_config.get("id_column"),
+        "timestamp_column": model_config.get("timestamp_column"),
+        "overall_metrics": _compute_overall_backtest_metrics(per_window_metrics),
+        "per_window_metrics": per_window_metrics,
+        "metadata": {
+            "backtest_strategy": "expanding_window",
+            "num_windows_requested": backtest_num_windows,
+            "num_windows_succeeded": len(per_window_metrics),
+            "num_windows_skipped": len(skipped_backtest_windows),
+            "skipped_windows": skipped_backtest_windows,
+        },
+    }
 
     # Save additional metadata about the selected model
     predictor_metadata = {
@@ -170,6 +247,7 @@ def autogluon_timeseries_models_full_refit(
         "target": model_config.get("target"),
         "id_column": model_config.get("id_column"),
         "timestamp_column": model_config.get("timestamp_column"),
+        "backtest_num_windows": backtest_num_windows,
     }
 
     with open(predictor_output / "predictor_metadata.json", "w") as f:
@@ -178,15 +256,13 @@ def autogluon_timeseries_models_full_refit(
     metrics_path = output_path / "metrics"
     metrics_path.mkdir(parents=True, exist_ok=True)
 
-    # Convert metrics to JSON-serializable format; drop NaN/Inf which break Protobuf Struct serialization
-    metrics_dict = {
-        k: float(v) if hasattr(v, "item") else v
-        for k, v in metrics.items()
-        if not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
-    }
+    metrics_dict = _metrics_to_json_dict(metrics)
 
     with open(metrics_path / "metrics.json", "w") as f:
         json.dump(metrics_dict, f, indent=2)
+
+    with open(metrics_path / "back_testing.json", "w") as f:
+        json.dump(back_testing_summary, f, indent=2)
 
     # Notebook generation
 
@@ -260,6 +336,7 @@ def autogluon_timeseries_models_full_refit(
         },
         "metrics": {
             "test_data": metrics_dict,
+            "back_testing": back_testing_summary,
         },
     }
     with (output_path / "model.json").open("w", encoding="utf-8") as f:
@@ -271,7 +348,10 @@ def autogluon_timeseries_models_full_refit(
         "model_config": model_config,
         "sampling_config": sampling_config,
         "split_config": split_config,
-        "metrics": {"test_data": metrics_dict},
+        "metrics": {
+            "test_data": metrics_dict,
+            "back_testing": back_testing_summary,
+        },
         "location": {
             "model_directory": model_name_full,
             "predictor": f"{model_name_full}/predictor",

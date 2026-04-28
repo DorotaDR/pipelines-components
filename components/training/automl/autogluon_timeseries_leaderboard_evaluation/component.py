@@ -28,8 +28,12 @@ def timeseries_leaderboard_evaluation(
     the artifact path::
 
         {artifact.path}/{model_name_full}/metrics/metrics.json
+        {artifact.path}/{model_name_full}/metrics/back_testing.json  (optional)
         {artifact.path}/{model_name_full}/predictor/
         {artifact.path}/{model_name_full}/notebooks/
+
+    When ``back_testing.json`` is missing, empty, or invalid (e.g. series too short for
+    rolling cutoffs), backtest columns show ``n/a`` and ``backtest_n`` is ``0``.
 
     Note: KFP does not propagate artifact metadata through executor inputs for collected
     artifact lists, so metrics are read from ``metrics/metrics.json`` on the filesystem
@@ -74,12 +78,43 @@ def timeseries_leaderboard_evaluation(
     """  # noqa: E501
     import json
     import logging
+    import math
     from pathlib import Path
 
     import pandas as pd
     from leaderboard_utils import _build_leaderboard_html, _build_leaderboard_table, _round_metrics
 
     logger = logging.getLogger(__name__)
+
+    def _load_backtest_rows(metrics_json_path: Path) -> list:
+        """Load ``back_testing.json`` next to ``metrics.json``; return [] if unusable."""
+        backtest_path = metrics_json_path.parent / "back_testing.json"
+        if not backtest_path.is_file():
+            return []
+        try:
+            data = json.loads(backtest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            logger.warning("Ignoring invalid back_testing.json at %s: %s", backtest_path, e)
+            return []
+        if not isinstance(data, dict):
+            return []
+        per_window_metrics = data.get("per_window_metrics")
+        if not isinstance(per_window_metrics, list):
+            return []
+        return [x for x in per_window_metrics if isinstance(x, dict) and isinstance(x.get("metrics"), dict)]
+
+    def _numeric_metric_keys(metrics_dict: dict) -> set[str]:
+        return {k for k, v in metrics_dict.items() if isinstance(v, (int, float))}
+
+    def _backtest_mean_for_metric(backtest_rows: list, metric_key: str) -> float | str:
+        vals = []
+        for entry in backtest_rows:
+            v = entry["metrics"].get(metric_key)
+            if isinstance(v, (int, float)) and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                vals.append(float(v))
+        if not vals:
+            return "n/a"
+        return round(sum(vals) / len(vals), 4)
 
     # Input validation
     if not isinstance(eval_metric, str) or not eval_metric.strip():
@@ -98,6 +133,7 @@ def timeseries_leaderboard_evaluation(
         #
         # Layout written by the refit component:
         #   {artifact.path}/{model_name_full}/metrics/metrics.json
+        #   {artifact.path}/{model_name_full}/metrics/back_testing.json  (optional)
         #   {artifact.path}/{model_name_full}/predictor/
         #   {artifact.path}/{model_name_full}/notebooks/
         metrics_file = next(artifact_path.glob("*/metrics/metrics.json"), None)
@@ -113,13 +149,16 @@ def timeseries_leaderboard_evaluation(
         with open(metrics_file, "r", encoding="utf-8") as f:
             metrics_dict = json.load(f)
 
+        backtest_rows = _load_backtest_rows(metrics_file)
+
         predictor_uri = f"{base_uri}/{model_name}/predictor"
         notebook_uri = f"{base_uri}/{model_name}/notebooks/automl_predictor_notebook.ipynb"
 
         results.append(
             {
                 "model": model_name,
-                **_round_metrics(metrics_dict),
+                "metrics_dict": metrics_dict,
+                "backtest_rows": backtest_rows,
                 "notebook": notebook_uri,
                 "predictor": predictor_uri,
             }
@@ -131,9 +170,40 @@ def timeseries_leaderboard_evaluation(
             "or produced no metrics/metrics.json output."
         )
 
+    holdout_metric_keys: set[str] = set()
+    for entry in results:
+        holdout_metric_keys.update(_numeric_metric_keys(entry["metrics_dict"]))
+
+    table_rows: list[dict] = []
+    sorted_metric_keys = sorted(holdout_metric_keys)
+    backtest_value_cols = [f"backtest_{k}_mean" for k in sorted_metric_keys]
+    for entry in results:
+        metrics_dict = entry["metrics_dict"]
+        backtest_rows = entry["backtest_rows"]
+        n_bt = len(backtest_rows)
+        row: dict = {
+            "model": entry["model"],
+            **_round_metrics({k: metrics_dict[k] for k in sorted_metric_keys if k in metrics_dict}),
+            "backtest_n": n_bt,
+            "notebook": entry["notebook"],
+            "predictor": entry["predictor"],
+        }
+        for mk in sorted_metric_keys:
+            col_name = f"backtest_{mk}_mean"
+            if n_bt == 0:
+                row[col_name] = "n/a"
+            else:
+                row[col_name] = _backtest_mean_for_metric(backtest_rows, mk)
+        table_rows.append(row)
+
+    ordered_columns = ["model"] + sorted_metric_keys + ["backtest_n"] + backtest_value_cols + ["notebook", "predictor"]
+
     # Notice: AutoGluon follows the "higher is better" strategy for all metrics.
     # Metrics like MASE and WAPE have their signs flipped so that higher value = better model.
-    leaderboard_df = pd.DataFrame(results).sort_values(by=eval_metric, ascending=False)
+    leaderboard_df = pd.DataFrame(table_rows, columns=ordered_columns).sort_values(
+        by=eval_metric,
+        ascending=False,
+    )
     n = len(leaderboard_df)
     leaderboard_df.index = pd.RangeIndex(start=1, stop=n + 1, name="rank")
 

@@ -121,7 +121,12 @@ def _install_autogluon_mocks(
     loaded_predictor._trainer = trainer
 
     refit_predictor = mock.MagicMock()
-    refit_predictor.evaluate.return_value = {"MASE": 1.23}
+    refit_predictor.evaluate.side_effect = [
+        {"MASE": 1.23},
+        {"MASE": 1.11},
+        {"MASE": 1.05},
+        {"MASE": 0.99},
+    ]
     if evaluate_side_effect is not None:
         refit_predictor.evaluate.side_effect = evaluate_side_effect
 
@@ -195,6 +200,7 @@ class TestTimeseriesModelsFullRefitUnitTests:
                 sample_rows='[{"item_id":"A","timestamp":"2024-01-01","target":1}]',
                 notebooks=notebooks,
                 model_artifact=model_artifact,
+                backtest_num_windows=1,
             )
 
         predictor_class.load.assert_called_once_with("/tmp/predictor")
@@ -208,10 +214,20 @@ class TestTimeseriesModelsFullRefitUnitTests:
         model_dir = Path(model_artifact.path) / "DeepAR_FULL"
         assert (model_dir / "predictor" / "predictor_metadata.json").exists()
         assert (model_dir / "metrics" / "metrics.json").exists()
+        assert (model_dir / "metrics" / "back_testing.json").exists()
         assert (model_dir / "notebooks" / "automl_predictor_notebook.ipynb").exists()
 
         metrics = json.loads((model_dir / "metrics" / "metrics.json").read_text(encoding="utf-8"))
         assert metrics == {"MASE": 1.23}
+        back_testing_summary = json.loads(
+            (model_dir / "metrics" / "back_testing.json").read_text(encoding="utf-8"),
+        )
+        assert back_testing_summary["model_name"] == "DeepAR_FULL"
+        assert back_testing_summary["num_val_windows"] == 1
+        assert back_testing_summary["overall_metrics"] == {"MASE": 1.11}
+        assert back_testing_summary["per_window_metrics"] == [
+            {"window_id": 0, "cutoff": -7, "metrics": {"MASE": 1.11}},
+        ]
 
         notebook_text = (model_dir / "notebooks" / "automl_predictor_notebook.ipynb").read_text(encoding="utf-8")
         assert "<REPLACE_" not in notebook_text
@@ -238,6 +254,116 @@ class TestTimeseriesModelsFullRefitUnitTests:
         assert model_artifact.metadata["display_name"] == "DeepAR_FULL"
         assert model_artifact.metadata["context"]["pipeline_info"]["pipeline_name"] == "my-pipeline-run"
         assert model_artifact.metadata["context"]["metrics"]["test_data"] == {"MASE": 1.23}
+        assert model_artifact.metadata["context"]["metrics"]["back_testing"]["overall_metrics"] == {"MASE": 1.11}
+
+    def test_full_refit_runs_multiple_backtest_windows(self, tmp_path):
+        """Configured backtest windows evaluate multiple cutoff points."""
+        test_dataset, model_artifact = _make_artifacts(tmp_path)
+        notebooks = _write_notebook_template(tmp_path)
+
+        patcher, _, _, refit_predictor = _install_autogluon_mocks()
+        with patcher:
+            autogluon_timeseries_models_full_refit.python_func(
+                model_name="DeepAR",
+                test_dataset=test_dataset,
+                predictor_path="/tmp/predictor",
+                sampling_config={},
+                split_config={},
+                model_config={
+                    "prediction_length": 7,
+                    "target": "target",
+                    "id_column": "item_id",
+                    "timestamp_column": "timestamp",
+                    "eval_metric": "MASE",
+                },
+                pipeline_name="my-pipeline-run-123",
+                run_id="run-456",
+                models_selection_train_data_path=str(tmp_path / "selection_train.csv"),
+                extra_train_data_path=str(tmp_path / "extra_train.csv"),
+                sample_rows='[{"item_id":"A","timestamp":"2024-01-01","target":1}]',
+                notebooks=notebooks,
+                model_artifact=model_artifact,
+            )
+
+        expected_calls = [
+            mock.call(mock.ANY, metrics=["MASE", "RMSE"]),
+            mock.call(mock.ANY, cutoff=-21, metrics=["MASE", "RMSE"]),
+            mock.call(mock.ANY, cutoff=-14, metrics=["MASE", "RMSE"]),
+            mock.call(mock.ANY, cutoff=-7, metrics=["MASE", "RMSE"]),
+        ]
+        assert refit_predictor.evaluate.call_args_list == expected_calls
+
+    def test_full_refit_raises_when_backtest_windows_is_invalid(self, tmp_path):
+        """Invalid backtest_num_windows fails fast with clear message."""
+        test_dataset, model_artifact = _make_artifacts(tmp_path)
+        notebooks = _write_notebook_template(tmp_path)
+        patcher, _, _, _ = _install_autogluon_mocks()
+
+        with patcher:
+            with pytest.raises(ValueError, match=r"backtest_num_windows must be >= 1"):
+                autogluon_timeseries_models_full_refit.python_func(
+                    model_name="DeepAR",
+                    test_dataset=test_dataset,
+                    predictor_path="/tmp/predictor",
+                    sampling_config={},
+                    split_config={},
+                    model_config={
+                        "prediction_length": 7,
+                        "target": "target",
+                        "id_column": "item_id",
+                        "timestamp_column": "timestamp",
+                    },
+                    pipeline_name="pipe-1",
+                    run_id="run-1",
+                    models_selection_train_data_path=str(tmp_path / "selection_train.csv"),
+                    extra_train_data_path=str(tmp_path / "extra_train.csv"),
+                    sample_rows='[{"target":1}]',
+                    notebooks=notebooks,
+                    model_artifact=model_artifact,
+                    backtest_num_windows=0,
+                )
+
+    def test_full_refit_skips_backtest_windows_that_fail(self, tmp_path):
+        """Backtest window evaluation failures are skipped and summarized."""
+        test_dataset, model_artifact = _make_artifacts(tmp_path)
+        notebooks = _write_notebook_template(tmp_path)
+        patcher, _, _, _ = _install_autogluon_mocks(
+            evaluate_side_effect=[
+                {"MASE": 1.23},  # Holdout evaluation succeeds
+                RuntimeError("window too short"),
+                RuntimeError("window too short"),
+                RuntimeError("window too short"),
+            ],
+        )
+
+        with patcher:
+            autogluon_timeseries_models_full_refit.python_func(
+                model_name="DeepAR",
+                test_dataset=test_dataset,
+                predictor_path="/tmp/predictor",
+                sampling_config={},
+                split_config={},
+                model_config={
+                    "prediction_length": 7,
+                    "target": "target",
+                    "id_column": "item_id",
+                    "timestamp_column": "timestamp",
+                },
+                pipeline_name="pipe-1",
+                run_id="run-1",
+                models_selection_train_data_path=str(tmp_path / "selection_train.csv"),
+                extra_train_data_path=str(tmp_path / "extra_train.csv"),
+                sample_rows='[{"target":1}]',
+                notebooks=notebooks,
+                model_artifact=model_artifact,
+            )
+
+        model_dir = Path(model_artifact.path) / "DeepAR_FULL"
+        back_testing_summary = json.loads((model_dir / "metrics" / "back_testing.json").read_text(encoding="utf-8"))
+        assert back_testing_summary["overall_metrics"] == {}
+        assert back_testing_summary["per_window_metrics"] == []
+        assert back_testing_summary["metadata"]["num_windows_succeeded"] == 0
+        assert back_testing_summary["metadata"]["num_windows_skipped"] == 3
 
     def test_model_json_matches_artifact_metadata(self, tmp_path):
         """model.json on disk is consistent with artifact metadata context."""

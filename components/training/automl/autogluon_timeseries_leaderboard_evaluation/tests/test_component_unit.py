@@ -19,16 +19,32 @@ def isolated_sys_modules():
 from ..component import timeseries_leaderboard_evaluation  # noqa: E402
 
 
-def _make_model_artifact(base_path: Path, model_name: str, metrics: dict, *, uri: str = "http://example.com/artifacts"):
+def _make_model_artifact(
+    base_path: Path,
+    model_name: str,
+    metrics: dict,
+    *,
+    uri: str = "http://example.com/artifacts",
+    backtest_rows: list | None = None,
+):
     """Create the filesystem layout written by autogluon_timeseries_models_full_refit and return a mock artifact.
 
     Layout:
         base_path/{model_name_full}/metrics/metrics.json
+        base_path/{model_name_full}/metrics/back_testing.json (optional)
     """
     model_name_full = f"{model_name}_FULL"
     metrics_dir = base_path / model_name_full / "metrics"
     metrics_dir.mkdir(parents=True)
     (metrics_dir / "metrics.json").write_text(json.dumps(metrics))
+    if backtest_rows is not None:
+        (metrics_dir / "back_testing.json").write_text(
+            json.dumps(
+                {
+                    "per_window_metrics": backtest_rows,
+                },
+            ),
+        )
 
     m = mock.MagicMock()
     m.uri = f"{uri}/{model_name_full}"
@@ -72,7 +88,16 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         """Test leaderboard with a single model: return value, metadata, HTML output."""
         artifact = _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85, "WAPE": -0.12})
 
-        columns = ["model", "MASE", "WAPE", "notebook", "predictor"]
+        columns = [
+            "model",
+            "MASE",
+            "WAPE",
+            "backtest_n",
+            "backtest_MASE_mean",
+            "backtest_WAPE_mean",
+            "notebook",
+            "predictor",
+        ]
         rows = [
             (
                 1,
@@ -80,6 +105,9 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                     "model": "ETS_FULL",
                     "MASE": -0.85,
                     "WAPE": -0.12,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "backtest_WAPE_mean": "n/a",
                     "notebook": "http://example.com/artifacts/ETS_FULL/ETS_FULL/notebooks/automl_predictor_notebook.ipynb",
                     "predictor": "http://example.com/artifacts/ETS_FULL/ETS_FULL/predictor",
                 },
@@ -139,11 +167,56 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             _make_model_artifact(tmp_path / "theta", "Theta", {"MASE": -0.95, "WAPE": -0.15}),
         ]
 
-        columns = ["model", "MASE", "WAPE", "notebook", "predictor"]
+        columns = [
+            "model",
+            "MASE",
+            "WAPE",
+            "backtest_n",
+            "backtest_MASE_mean",
+            "backtest_WAPE_mean",
+            "notebook",
+            "predictor",
+        ]
         rows = [
-            (1, {"model": "DeepAR_FULL", "MASE": -0.72, "WAPE": -0.09, "notebook": "nb2", "predictor": "p2"}),
-            (2, {"model": "ETS_FULL", "MASE": -0.85, "WAPE": -0.12, "notebook": "nb1", "predictor": "p1"}),
-            (3, {"model": "Theta_FULL", "MASE": -0.95, "WAPE": -0.15, "notebook": "nb3", "predictor": "p3"}),
+            (
+                1,
+                {
+                    "model": "DeepAR_FULL",
+                    "MASE": -0.72,
+                    "WAPE": -0.09,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "backtest_WAPE_mean": "n/a",
+                    "notebook": "nb2",
+                    "predictor": "p2",
+                },
+            ),
+            (
+                2,
+                {
+                    "model": "ETS_FULL",
+                    "MASE": -0.85,
+                    "WAPE": -0.12,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "backtest_WAPE_mean": "n/a",
+                    "notebook": "nb1",
+                    "predictor": "p1",
+                },
+            ),
+            (
+                3,
+                {
+                    "model": "Theta_FULL",
+                    "MASE": -0.95,
+                    "WAPE": -0.15,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "backtest_WAPE_mean": "n/a",
+                    "notebook": "nb3",
+                    "predictor": "p3",
+                },
+            ),
         ]
         mock_df_sorted = _make_mock_sorted_df(rows, columns)
         mock_df = mock.MagicMock()
@@ -193,8 +266,20 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
 
         good_artifact = _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85})
 
-        columns = ["model", "MASE", "notebook", "predictor"]
-        rows = [(1, {"model": "ETS_FULL", "MASE": -0.85, "notebook": "nb", "predictor": "p"})]
+        columns = ["model", "MASE", "backtest_n", "backtest_MASE_mean", "notebook", "predictor"]
+        rows = [
+            (
+                1,
+                {
+                    "model": "ETS_FULL",
+                    "MASE": -0.85,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "notebook": "nb",
+                    "predictor": "p",
+                },
+            ),
+        ]
         mock_df_sorted = _make_mock_sorted_df(rows, columns)
         mock_df = mock.MagicMock()
         mock_df.sort_values.return_value = mock_df_sorted
@@ -283,13 +368,15 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         )
 
         with mock.patch("pandas.DataFrame") as mock_df_class:
-            columns = ["model", "MASE", "notebook", "predictor"]
+            columns = ["model", "MASE", "backtest_n", "backtest_MASE_mean", "notebook", "predictor"]
             rows = [
                 (
                     1,
                     {
                         "model": "ETS_FULL",
                         "MASE": -0.85,
+                        "backtest_n": 0,
+                        "backtest_MASE_mean": "n/a",
                         "notebook": "http://s3.example.com/bucket/run-id/artifacts/ETS_FULL/ETS_FULL/notebooks/automl_predictor_notebook.ipynb",
                         "predictor": "http://s3.example.com/bucket/run-id/artifacts/ETS_FULL/ETS_FULL/predictor",
                     },
@@ -327,9 +414,30 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         bad_artifact.path = str(bad_dir)
         bad_artifact.metadata = {}
 
-        columns = ["model", "MASE", "WAPE", "notebook", "predictor"]
+        columns = [
+            "model",
+            "MASE",
+            "WAPE",
+            "backtest_n",
+            "backtest_MASE_mean",
+            "backtest_WAPE_mean",
+            "notebook",
+            "predictor",
+        ]
         rows = [
-            (1, {"model": "ETS_FULL", "MASE": -0.85, "WAPE": -0.12, "notebook": "nb", "predictor": "pred"}),
+            (
+                1,
+                {
+                    "model": "ETS_FULL",
+                    "MASE": -0.85,
+                    "WAPE": -0.12,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "backtest_WAPE_mean": "n/a",
+                    "notebook": "nb",
+                    "predictor": "pred",
+                },
+            ),
         ]
         mock_df_sorted = _make_mock_sorted_df(rows, columns)
 
@@ -381,3 +489,120 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         assert callable(timeseries_leaderboard_evaluation)
         assert hasattr(timeseries_leaderboard_evaluation, "python_func")
         assert hasattr(timeseries_leaderboard_evaluation, "component_spec")
+
+    @mock.patch("pandas.DataFrame")
+    def test_backtest_means_from_back_testing_json(
+        self, mock_dataframe_class, tmp_path, html_output_path, embedded_artifact
+    ):
+        """back_testing.json produces backtest_n and per-metric means; HTML mentions backtest columns."""
+        backtest = [
+            {"cutoff": -14, "metrics": {"MASE": -0.8, "WAPE": -0.1}},
+            {"cutoff": -7, "metrics": {"MASE": -0.6, "WAPE": -0.2}},
+        ]
+        artifact = _make_model_artifact(
+            tmp_path / "ets",
+            "ETS",
+            {"MASE": -0.85, "WAPE": -0.12},
+            backtest_rows=backtest,
+        )
+
+        columns = [
+            "model",
+            "MASE",
+            "WAPE",
+            "backtest_n",
+            "backtest_MASE_mean",
+            "backtest_WAPE_mean",
+            "notebook",
+            "predictor",
+        ]
+        rows = [
+            (
+                1,
+                {
+                    "model": "ETS_FULL",
+                    "MASE": -0.85,
+                    "WAPE": -0.12,
+                    "backtest_n": 2,
+                    "backtest_MASE_mean": -0.7,
+                    "backtest_WAPE_mean": -0.15,
+                    "notebook": "nb",
+                    "predictor": "pred",
+                },
+            ),
+        ]
+        mock_df_sorted = _make_mock_sorted_df(rows, columns)
+        mock_df = mock.MagicMock()
+        mock_df.sort_values.return_value = mock_df_sorted
+        mock_dataframe_class.return_value = mock_df
+
+        mock_html = mock.MagicMock()
+        mock_html.path = html_output_path
+        mock_html.metadata = {}
+
+        timeseries_leaderboard_evaluation.python_func(
+            models=[artifact],
+            eval_metric="MASE",
+            html_artifact=mock_html,
+            embedded_artifact=embedded_artifact,
+        )
+
+        call_args = mock_dataframe_class.call_args[0][0]
+        assert len(call_args) == 1
+        row0 = call_args[0]
+        assert row0["backtest_n"] == 2
+        assert row0["backtest_MASE_mean"] == -0.7
+        assert row0["backtest_WAPE_mean"] == -0.15
+
+        html = Path(html_output_path).read_text()
+        assert "backtest_n" in html
+        assert "backtest_MASE_mean" in html
+
+    @mock.patch("pandas.DataFrame")
+    def test_empty_back_testing_file_treated_as_no_backtests(
+        self, mock_dataframe_class, tmp_path, html_output_path, embedded_artifact
+    ):
+        """back_testing.json without per_window_metrics yields backtest_n=0 and n/a means."""
+        model_dir = tmp_path / "ets" / "ETS_FULL" / "metrics"
+        model_dir.mkdir(parents=True)
+        (model_dir / "metrics.json").write_text(json.dumps({"MASE": -0.85}))
+        (model_dir / "back_testing.json").write_text("{}")
+
+        artifact = mock.MagicMock()
+        artifact.uri = "http://example.com/artifacts/ETS_FULL"
+        artifact.path = str(tmp_path / "ets")
+        artifact.metadata = {}
+
+        columns = ["model", "MASE", "backtest_n", "backtest_MASE_mean", "notebook", "predictor"]
+        rows = [
+            (
+                1,
+                {
+                    "model": "ETS_FULL",
+                    "MASE": -0.85,
+                    "backtest_n": 0,
+                    "backtest_MASE_mean": "n/a",
+                    "notebook": "nb",
+                    "predictor": "pred",
+                },
+            ),
+        ]
+        mock_df_sorted = _make_mock_sorted_df(rows, columns)
+        mock_df = mock.MagicMock()
+        mock_df.sort_values.return_value = mock_df_sorted
+        mock_dataframe_class.return_value = mock_df
+
+        mock_html = mock.MagicMock()
+        mock_html.path = html_output_path
+        mock_html.metadata = {}
+
+        timeseries_leaderboard_evaluation.python_func(
+            models=[artifact],
+            eval_metric="MASE",
+            html_artifact=mock_html,
+            embedded_artifact=embedded_artifact,
+        )
+
+        call_args = mock_dataframe_class.call_args[0][0]
+        assert call_args[0]["backtest_n"] == 0
+        assert call_args[0]["backtest_MASE_mean"] == "n/a"

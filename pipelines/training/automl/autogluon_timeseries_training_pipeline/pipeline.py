@@ -43,6 +43,7 @@ def autogluon_timeseries_training_pipeline(
     known_covariates_names: Optional[List[str]] = None,
     prediction_length: int = 1,
     top_n: int = 3,
+    backtest_num_windows: int = 3,
 ):
     """AutoGluon time series training pipeline.
 
@@ -98,6 +99,8 @@ def autogluon_timeseries_training_pipeline(
         prediction_length: Number of time steps to forecast (horizon length). Positive integer
             (default: 1).
         top_n: Number of top models to select for the leaderboard and output (default: 3).
+        backtest_num_windows: Number of rolling ``evaluate`` cutoffs on the hold-out test split
+            during full refit (passed to ``autogluon_timeseries_models_full_refit``; default: 3).
 
     Returns:
         This pipeline wires task outputs between components; compiled runs expose artifacts from the
@@ -180,6 +183,7 @@ def autogluon_timeseries_training_pipeline(
             models_selection_train_data_path=data_loader_task.outputs["models_selection_train_data_path"],
             extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
             sample_rows=data_loader_task.outputs["sample_rows"],
+            backtest_num_windows=backtest_num_windows,
         )
         refit_task.set_caching_options(False)
         refit_task.set_cpu_request("2").set_memory_request("8Gi")
