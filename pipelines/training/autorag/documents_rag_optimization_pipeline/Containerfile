@@ -1,4 +1,10 @@
 # This container is used to run the AutoRAG components of the training pipeline.
+#
+# Build context: this directory (not the repo root). Example from repo root:
+#   nerdctl build --platform=linux/amd64 \
+#     -f pipelines/training/autorag/documents_rag_optimization_pipeline/Containerfile \
+#     -t documents-rag-opt:test \
+#     pipelines/training/autorag/documents_rag_optimization_pipeline
 
 # Docling ONNX models from ModelCar images (COPY --from). Override for prod registry if needed.
 # ARGs used in FROM must be declared before any FROM (Buildah/Konflux).
@@ -10,14 +16,8 @@ FROM ${DOCLING_LAYOUT_MODELCAR} AS docling-layout-heron
 FROM ${DOCLING_MODELS_MODELCAR} AS docling-models
 FROM ${BASE_IMAGE}
 
-COPY pipelines/training/autorag/documents_rag_optimization_pipeline/requirements.txt \
-     pipelines/training/autorag/documents_rag_optimization_pipeline/requirements-pypi.txt \
-     pipelines/training/autorag/documents_rag_optimization_pipeline/requirements-pypi-whl.txt \
-     /tmp/
-
-COPY pipelines/training/autorag/documents_rag_optimization_pipeline/artifacts.lock.yaml \
-     pipelines/training/autorag/documents_rag_optimization_pipeline/install_sqlite_from_source.sh \
-     /tmp/
+COPY requirements.txt requirements-pypi.txt requirements-pypi-whl.txt /tmp/
+COPY artifacts.lock.yaml install_sqlite_from_source.sh /tmp/
 
 # Build SQLite from sqlite-autoconf (Hermeto generic prefetch or download); replace system libsqlite3.
 # https://github.com/hermetoproject/hermeto/blob/main/docs/generic.md
