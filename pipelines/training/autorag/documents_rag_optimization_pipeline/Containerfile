@@ -1,14 +1,13 @@
 # This container is used to run the AutoRAG components of the training pipeline.
 
 # Docling ONNX models from ModelCar images (COPY --from). Override for prod registry if needed.
+# ARGs used in FROM must be declared before any FROM (Buildah/Konflux).
+ARG BASE_IMAGE="quay.io/aipcc/base-images/cpu:3.4"
 ARG DOCLING_LAYOUT_MODELCAR=registry.stage.redhat.io/rhai/modelcar-docling-project-docling-layout-heron:3.0
 ARG DOCLING_MODELS_MODELCAR=registry.stage.redhat.io/rhai/modelcar-docling-project-docling-models:3.0
 
 FROM ${DOCLING_LAYOUT_MODELCAR} AS docling-layout-heron
 FROM ${DOCLING_MODELS_MODELCAR} AS docling-models
-
-ARG BASE_IMAGE="quay.io/aipcc/base-images/cpu:3.4"
-
 FROM ${BASE_IMAGE}
 
 COPY pipelines/training/autorag/documents_rag_optimization_pipeline/requirements.txt \
