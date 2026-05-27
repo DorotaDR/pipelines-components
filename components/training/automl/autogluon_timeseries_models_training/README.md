@@ -26,10 +26,10 @@ Refit outputs for all selected models are written under one ``models_artifact`` 
 | `run_id` | `str` | `None` | Pipeline run id used in generated notebook placeholders. |
 | `models_artifact` | `dsl.Output[dsl.Model]` | `None` | Combined output artifact containing all refitted models. |
 | `notebooks` | `dsl.EmbeddedInput[dsl.Dataset]` | `None` | Embedded notebook templates. |
-| `sample_rows` | `str` | `[]` | Optional sample rows JSON string used in generated notebook placeholders. |
+| `extra_train_data_path` | `str` | `None` | Path to extra train split for full refit. |
+| `sample_rows` | `str` | `[]` | Sample rows JSON string used in generated notebook placeholders. |
 | `sampling_config` | `Optional[dict]` | `None` | Optional sampling config stored in artifact metadata. |
 | `split_config` | `Optional[dict]` | `None` | Optional split config stored in artifact metadata. |
-| `extra_train_data_path` | `str` | `""` | Path to extra train split for full refit. |
 | `prediction_length` | `int` | `1` | Forecast horizon (number of timesteps). |
 | `known_covariates_names` | `Optional[List[str]]` | `None` | Optional list of known covariate column names. |
 
@@ -106,7 +106,7 @@ def example_pipeline(
   - timeseries
   - automl
   - model-selection
-- **Last Verified**: 2026-04-10 12:00:00+00:00
+- **Last Verified**: 2026-05-27 12:00:00+00:00
 - **Owners**:
   - Approvers:
     - LukaszCmielowski
