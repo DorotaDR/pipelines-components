@@ -9,16 +9,17 @@ from kfp_components.utils.consts import AUTOML_IMAGE  # pyright: ignore[reportMi
     install_kfp_package=False,
 )
 def automl_data_loader(  # noqa: D417
-    file_key: str,
-    bucket_name: str,
+    train_data_key: str,
     workspace_path: str,
     label_column: str,
     sampled_test_dataset: dsl.Output[dsl.Dataset],
     component_status: dsl.Output[dsl.Artifact],
+    data_source: str = "s3",
     sampling_method: Optional[str] = None,
     task_type: str = "regression",
     split_config: Optional[dict] = None,
     selection_train_size: float = 0.3,
+    pvc_mount_path: str = "/mnt/data",
 ) -> NamedTuple(
     "outputs",
     sample_config=dict,
@@ -29,7 +30,7 @@ def automl_data_loader(  # noqa: D417
 ):
     """Automl Data Loader component.
 
-    Loads tabular (CSV) data from S3 in batches, sampling up to 100 MB of data,
+    Loads tabular (CSV) data from S3 or PVC in batches, sampling up to 100 MB of data,
     then splits the sampled data into test, selection-train, and extra-train sets.
 
     The component reads data in chunks to efficiently handle large files without
@@ -60,20 +61,28 @@ def automl_data_loader(  # noqa: D417
     idea as AutoAI ``loadXy``), then **full-row duplicates** are dropped before the
     label drop and train/test split.
 
-    Authentication uses AWS-style credentials provided via environment variables
-    (e.g. from a Kubernetes secret).
+    **Data source:**
+
+    - When ``data_source="s3"``: Loads from S3-compatible object storage. Bucket name
+      is read from ``AWS_S3_BUCKET`` environment variable. Authentication uses AWS-style
+      credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT) provided
+      via environment variables (e.g. from a Kubernetes secret).
+
+    - When ``data_source="pvc"``: Loads from a mounted PVC. The
+      ``train_data_key`` is resolved as a path relative to ``pvc_mount_path``.
 
     Args:
-        file_key: S3 object key of the CSV file.
-        bucket_name: S3 bucket name containing the file.
+        train_data_key: S3 object key (when data_source="s3") or PVC-relative path (when data_source="pvc") of the CSV file.
         workspace_path: PVC workspace directory where train CSVs will be written.
         label_column: Name of the label/target column in the dataset.
         sampled_test_dataset: Output dataset artifact for the test split.
         component_status: Output artifact containing stage-level progress tracking for this component.
+        data_source: Data source type: "s3" (default) or "pvc".
         sampling_method: "first_n_rows", "stratified", or "random"; if None, derived from task_type.
         task_type: "binary", "multiclass", or "regression" (default); used when sampling_method is None.
         split_config: Split configuration dictionary. Available keys: "test_size" (float), "random_state" (int), "stratify" (bool).
         selection_train_size: Fraction of the train portion used for model selection (default 0.3).
+        pvc_mount_path: Mount path for PVC (default "/mnt/data"). Only used when data_source="pvc".
 
     Raises:
         ValueError: If sampling_method or task_type is invalid, if required parameters are missing,
@@ -101,13 +110,15 @@ def automl_data_loader(  # noqa: D417
 
     # Input validation
     for param, value in (
-        ("bucket_name", bucket_name),
-        ("file_key", file_key),
+        ("train_data_key", train_data_key),
         ("workspace_path", workspace_path),
         ("label_column", label_column),
     ):
         if not isinstance(value, str) or not value.strip():
             raise TypeError(f"{param} must be a non-empty string.")
+
+    if data_source not in ("s3", "pvc"):
+        raise ValueError(f"data_source must be 's3' or 'pvc'; got {data_source!r}.")
 
     if task_type not in VALID_TASK_TYPES:
         raise ValueError(f"task_type must be one of {VALID_TASK_TYPES}; got {task_type!r}.")
@@ -292,6 +303,28 @@ def automl_data_loader(  # noqa: D417
                     raise ValueError(f"Error reading CSV from S3: {str(e)}") from e
                 return subsampled_data
 
+        def load_data_from_pvc(
+            file_path,
+            max_size_bytes,
+            sampling_method,
+            label_column,
+        ):
+            """Load CSV from PVC file in batches and return a sampled dataframe using the chosen strategy."""
+            if sampling_method == "stratified" and label_column is None:
+                raise ValueError("label_column must be provided when sampling_method='stratified'")
+
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(
+                    f"CSV file not found at PVC path: {file_path}. Check that train_data_key is correct."
+                )
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                if sampling_method == "stratified":
+                    return _sample_stratified(f, PANDAS_CHUNK_SIZE, max_size_bytes, label_column)
+                if sampling_method == "random":
+                    return _sample_random(f, PANDAS_CHUNK_SIZE, max_size_bytes)
+                return _sample_first_n_rows(f, PANDAS_CHUNK_SIZE, max_size_bytes)
+
         def load_data_in_batches(
             s3_client,
             bucket_name,
@@ -324,21 +357,45 @@ def automl_data_loader(  # noqa: D417
                 return _sample_random(text_stream, PANDAS_CHUNK_SIZE, max_size_bytes)
             return _sample_first_n_rows(text_stream, PANDAS_CHUNK_SIZE, max_size_bytes)
 
-        status.record(
-            "prepare_data",
-            "running",
-            sampling_method=sampling_method,
-            source=f"s3://{bucket_name}/{file_key}",
-        )
-        s3_client = get_s3_client()
-        sampled_dataframe = load_data_in_batches(
-            s3_client,
-            bucket_name,
-            file_key,
-            max_size_bytes=MAX_SIZE_BYTES,
-            sampling_method=sampling_method,
-            label_column=label_column,
-        )
+        # Load data from S3 or PVC based on data_source
+        if data_source == "s3":
+            bucket_name = os.environ.get("AWS_S3_BUCKET")
+            if not bucket_name:
+                raise ValueError(
+                    "AWS_S3_BUCKET environment variable is required when data_source='s3'. "
+                    "Ensure the secret contains AWS_S3_BUCKET key."
+                )
+            status.record(
+                "prepare_data",
+                "running",
+                sampling_method=sampling_method,
+                source=f"s3://{bucket_name}/{train_data_key}",
+            )
+            s3_client = get_s3_client()
+            sampled_dataframe = load_data_in_batches(
+                s3_client,
+                bucket_name,
+                train_data_key,
+                max_size_bytes=MAX_SIZE_BYTES,
+                sampling_method=sampling_method,
+                label_column=label_column,
+            )
+        elif data_source == "pvc":
+            file_path = os.path.join(pvc_mount_path, train_data_key)
+            status.record(
+                "prepare_data",
+                "running",
+                sampling_method=sampling_method,
+                source=f"pvc://{file_path}",
+            )
+            sampled_dataframe = load_data_from_pvc(
+                file_path,
+                max_size_bytes=MAX_SIZE_BYTES,
+                sampling_method=sampling_method,
+                label_column=label_column,
+            )
+        else:
+            raise ValueError(f"Unsupported data_source: {data_source}")
 
         if label_column not in sampled_dataframe.columns:
             raise ValueError(
@@ -386,13 +443,21 @@ def automl_data_loader(  # noqa: D417
             )
 
         n_samples = n_valid
-        logger.info(
-            "Read %d rows from s3://%s/%s (sampling_method=%s)",
-            n_samples,
-            bucket_name,
-            file_key,
-            sampling_method,
-        )
+        if data_source == "s3":
+            logger.info(
+                "Read %d rows from s3://%s/%s (sampling_method=%s)",
+                n_samples,
+                bucket_name,
+                train_data_key,
+                sampling_method,
+            )
+        else:
+            logger.info(
+                "Read %d rows from pvc://%s (sampling_method=%s)",
+                n_samples,
+                file_path,
+                sampling_method,
+            )
         status.record(
             "prepare_data",
             "completed",

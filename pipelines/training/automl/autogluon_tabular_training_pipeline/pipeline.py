@@ -1,10 +1,15 @@
 from kfp import dsl
 from kfp_components.components.data_processing.automl.tabular_data_loader import automl_data_loader
+from kfp_components.components.data_processing.determine_data_source_and_config import (
+    determine_data_source_and_config,
+)
+from kfp_components.components.data_processing.read_pvc_name_from_secret import read_pvc_name_from_secret
 from kfp_components.components.training.automl.autogluon_models_training import autogluon_models_training
 from kfp_components.components.training.automl.component_stage_map_publisher import publish_component_stage_map
 
 MAX_CPUS = "32"
 MAX_MEMORY = "64Gi"
+PVC_MOUNT_PATH = "/mnt/data"
 
 # Must match run_status_templates/pipelines/<name>.json
 PIPELINE_NAME = "autogluon-tabular-training-pipeline"
@@ -33,8 +38,7 @@ PIPELINE_NAME = "autogluon-tabular-training-pipeline"
 )
 def autogluon_tabular_training_pipeline(
     train_data_secret_name: str,
-    train_data_bucket_name: str,
-    train_data_file_key: str,
+    train_data_key: str,
     label_column: str,
     task_type: str,
     top_n: int = 3,
@@ -59,13 +63,27 @@ def autogluon_tabular_training_pipeline(
     the test dataset is written to an S3 artifact (for use by the leaderboard evaluation
     component). The workspace is provisioned via ``PipelineConfig.workspace``.
 
+    **Data source support:**
+
+    Input training data can be loaded from either S3-compatible object storage or an
+    existing Kubernetes PersistentVolumeClaim (PVC). The data source is auto-detected
+    from the secret credentials:
+
+    - **S3**: Secret must contain AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+      AWS_S3_ENDPOINT, and AWS_S3_BUCKET.
+    - **PVC**: Secret must contain PVC_NAME.
+
+    The pipeline automatically detects which credential set is present and configures
+    the data loader accordingly. For PVC sources, the input volume is mounted at the
+    path defined by the PVC_MOUNT_PATH constant (default: /mnt/data) on the data
+    loader pod.
+
     **Pipeline Stages:**
 
     0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP
        artifact for dashboards before any data I/O.
 
-    1. **Data Loading & Splitting**: Loads tabular (CSV) data from an S3-compatible
-       object storage bucket using AWS credentials configured via Kubernetes secrets.
+    1. **Data Loading & Splitting**: Loads tabular (CSV) data from S3 or PVC.
        The component samples the data (up to 1GB), then performs a two-stage split:
        *Primary split** (default 80/20): separates a *test set* (20%, written to an
          S3 artifact) from the *train portion* (80%).
@@ -112,9 +130,8 @@ def autogluon_tabular_training_pipeline(
     - Selecting optimal ensemble configurations
 
     Args:
-        train_data_secret_name: Kubernetes secret name with S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_DEFAULT_REGION).
-        train_data_bucket_name: S3-compatible bucket name containing the tabular data file.
-        train_data_file_key: S3 object key of the CSV file (features and target column).
+        train_data_secret_name: Kubernetes secret name with S3 or PVC credentials. For S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_S3_BUCKET, AWS_DEFAULT_REGION (optional). For PVC: PVC_NAME.
+        train_data_key: S3 object key (e.g., "datasets/data.csv") or PVC-relative path (e.g., "datasets/data.csv" resolves to {PVC_MOUNT_PATH}/datasets/data.csv).
         label_column: Name of the target/label column in the dataset.
         task_type: "binary", "multiclass", or "regression"; drives metrics and model types.
         top_n: Number of top models to select and refit (default: 3); positive integer from range [1, 10].
@@ -136,17 +153,25 @@ def autogluon_tabular_training_pipeline(
             autogluon_tabular_training_pipeline
         )
 
-        # Compile and run the pipeline
+        # S3 example
         pipeline = autogluon_tabular_training_pipeline(
-            train_data_secret_name="my-s3-secret",
-            train_data_bucket_name="my-data-bucket",
-            train_data_file_key="datasets/housing_prices.csv",
+            train_data_secret_name="my-s3-secret",  # contains AWS_S3_BUCKET
+            train_data_key="datasets/housing_prices.csv",
+            label_column="price",
+            task_type="regression",
+            top_n=3,
+        )
+
+        # PVC example
+        pipeline = autogluon_tabular_training_pipeline(
+            train_data_secret_name="my-pvc-secret",  # contains PVC_NAME
+            train_data_key="datasets/housing_prices.csv",  # relative to PVC_MOUNT_PATH
             label_column="price",
             task_type="regression",
             top_n=3,
         )
     """  # noqa: E501
-    from kfp.kubernetes import use_secret_as_env
+    from kfp.kubernetes import mount_pvc, use_secret_as_env
 
     # Publish component-to-stage-to-step map first so dashboards know expected structure
     component_stage_map_task = publish_component_stage_map(
@@ -158,61 +183,145 @@ def autogluon_tabular_training_pipeline(
         "1Gi"
     )
 
-    data_loader_task = automl_data_loader(
-        bucket_name=train_data_bucket_name,
-        file_key=train_data_file_key,
-        workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
-        label_column=label_column,
-        task_type=task_type,
-    )
-    data_loader_task.after(component_stage_map_task)
-    data_loader_task.set_caching_options(False)
-    data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(MAX_MEMORY)
-
+    # Detect data source from secret credentials
+    detect_task = determine_data_source_and_config()
+    detect_task.after(component_stage_map_task)
+    detect_task.set_caching_options(False)
+    detect_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
     use_secret_as_env(
-        data_loader_task,
+        detect_task,
         secret_name=train_data_secret_name,
         secret_key_to_env={
             "AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY",
             "AWS_S3_ENDPOINT": "AWS_S3_ENDPOINT",
+            "AWS_S3_BUCKET": "AWS_S3_BUCKET",
             "AWS_DEFAULT_REGION": "AWS_DEFAULT_REGION",
+            "PVC_NAME": "PVC_NAME",
         },
-        optional=True,  # Mark as optional to not block the pipeline. If needed, error will be raised by component
+        optional=True,
     )
 
-    # Stage 1 + 2: Model selection and sequential refit of top N models.
-    # Resource limits differ by preset: balanced needs more CPU/memory than speed.
-    _training_kwargs = dict(
-        label_column=label_column,
-        task_type=task_type,
-        top_n=top_n,
-        positive_class=positive_class,
-        train_data_path=data_loader_task.outputs["models_selection_train_data_path"],
-        test_data=data_loader_task.outputs["sampled_test_dataset"],
-        workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
-        pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
-        run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
-        sample_row=data_loader_task.outputs["sample_row"],
-        sampling_config=data_loader_task.outputs["sample_config"],
-        split_config=data_loader_task.outputs["split_config"],
-        extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
-        preset=preset,
-        eval_metric=eval_metric,
-    )
-    with dsl.If(preset == "balanced"):
-        training_task_bl = autogluon_models_training(**_training_kwargs)
-        training_task_bl.set_caching_options(False)
-        training_task_bl.set_cpu_request("8").set_memory_request("32Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
+    # Conditional branching based on detected data source
+    with dsl.If(detect_task.output == "pvc"):
+        # PVC path: read PVC name from secret and mount it
+        pvc_name_task = read_pvc_name_from_secret()
+        pvc_name_task.set_caching_options(False)
+        pvc_name_task.set_cpu_request("0.5").set_memory_request("512Mi").set_cpu_limit("1").set_memory_limit("1Gi")
+        use_secret_as_env(
+            pvc_name_task,
+            secret_name=train_data_secret_name,
+            secret_key_to_env={"PVC_NAME": "PVC_NAME"},
+        )
+
+        data_loader_task = automl_data_loader(
+            train_data_key=train_data_key,
+            workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
+            label_column=label_column,
+            task_type=task_type,
+            data_source="pvc",
+            pvc_mount_path=PVC_MOUNT_PATH,
+        )
+        data_loader_task.set_caching_options(False)
+        data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
+        mount_pvc(
+            data_loader_task,
+            pvc_name=pvc_name_task.output,
+            mount_path=PVC_MOUNT_PATH,
+        )
+
+        # Training task for PVC branch
+        _training_kwargs_pvc = dict(
+            label_column=label_column,
+            task_type=task_type,
+            top_n=top_n,
+            positive_class=positive_class,
+            train_data_path=data_loader_task.outputs["models_selection_train_data_path"],
+            test_data=data_loader_task.outputs["sampled_test_dataset"],
+            workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
+            pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
+            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+            sample_row=data_loader_task.outputs["sample_row"],
+            sampling_config=data_loader_task.outputs["sample_config"],
+            split_config=data_loader_task.outputs["split_config"],
+            extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
+            preset=preset,
+            eval_metric=eval_metric,
+        )
+
+        with dsl.If(preset == "balanced"):
+            training_task_bl_pvc = autogluon_models_training(**_training_kwargs_pvc)
+            training_task_bl_pvc.set_caching_options(False)
+            training_task_bl_pvc.set_cpu_request("8").set_memory_request("32Gi").set_cpu_limit(
+                MAX_CPUS
+            ).set_memory_limit(MAX_MEMORY)
+
+        with dsl.Else():
+            training_task_sp_pvc = autogluon_models_training(**_training_kwargs_pvc)
+            training_task_sp_pvc.set_caching_options(False)
+            training_task_sp_pvc.set_cpu_request("4").set_memory_request("16Gi").set_cpu_limit(
+                MAX_CPUS
+            ).set_memory_limit(MAX_MEMORY)
 
     with dsl.Else():
-        training_task_sp = autogluon_models_training(**_training_kwargs)
-        training_task_sp.set_caching_options(False)
-        training_task_sp.set_cpu_request("4").set_memory_request("16Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
+        # S3 path: inject S3 credentials
+        data_loader_task = automl_data_loader(
+            train_data_key=train_data_key,
+            workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
+            label_column=label_column,
+            task_type=task_type,
+            data_source="s3",
+        )
+        data_loader_task.set_caching_options(False)
+        data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(
             MAX_MEMORY
         )
+        use_secret_as_env(
+            data_loader_task,
+            secret_name=train_data_secret_name,
+            secret_key_to_env={
+                "AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY",
+                "AWS_S3_ENDPOINT": "AWS_S3_ENDPOINT",
+                "AWS_S3_BUCKET": "AWS_S3_BUCKET",
+                "AWS_DEFAULT_REGION": "AWS_DEFAULT_REGION",
+            },
+        )
+
+        # Training task for S3 branch
+        _training_kwargs_s3 = dict(
+            label_column=label_column,
+            task_type=task_type,
+            top_n=top_n,
+            positive_class=positive_class,
+            train_data_path=data_loader_task.outputs["models_selection_train_data_path"],
+            test_data=data_loader_task.outputs["sampled_test_dataset"],
+            workspace_path=dsl.WORKSPACE_PATH_PLACEHOLDER,
+            pipeline_name=dsl.PIPELINE_JOB_RESOURCE_NAME_PLACEHOLDER,
+            run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+            sample_row=data_loader_task.outputs["sample_row"],
+            sampling_config=data_loader_task.outputs["sample_config"],
+            split_config=data_loader_task.outputs["split_config"],
+            extra_train_data_path=data_loader_task.outputs["extra_train_data_path"],
+            preset=preset,
+            eval_metric=eval_metric,
+        )
+
+        with dsl.If(preset == "balanced"):
+            training_task_bl_s3 = autogluon_models_training(**_training_kwargs_s3)
+            training_task_bl_s3.set_caching_options(False)
+            training_task_bl_s3.set_cpu_request("8").set_memory_request("32Gi").set_cpu_limit(
+                MAX_CPUS
+            ).set_memory_limit(MAX_MEMORY)
+
+        with dsl.Else():
+            training_task_sp_s3 = autogluon_models_training(**_training_kwargs_s3)
+            training_task_sp_s3.set_caching_options(False)
+            training_task_sp_s3.set_cpu_request("4").set_memory_request("16Gi").set_cpu_limit(
+                MAX_CPUS
+            ).set_memory_limit(MAX_MEMORY)
 
 
 if __name__ == "__main__":

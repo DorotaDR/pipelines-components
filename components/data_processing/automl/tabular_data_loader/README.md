@@ -6,7 +6,7 @@
 
 Automl Data Loader component.
 
-Loads tabular (CSV) data from S3 in batches, sampling up to 100 MB of data, then splits the sampled data into test, selection-train, and extra-train sets.
+Loads tabular (CSV) data from S3 or PVC in batches, sampling up to 100 MB of data, then splits the sampled data into test, selection-train, and extra-train sets.
 
 The component reads data in chunks to efficiently handle large files without loading the entire dataset into memory at once. After sampling, it performs a two-stage split:
 
@@ -23,22 +23,28 @@ After cleansing (infinity replacement, duplicate removal, and label drop), at le
 
 After sampling, **+/- infinity** values in the frame are replaced with **NaN** (same idea as AutoAI ``loadXy``), then **full-row duplicates** are dropped before the label drop and train/test split.
 
-Authentication uses AWS-style credentials provided via environment variables (e.g. from a Kubernetes secret).
+**Data source:**
+
+- When ``data_source="s3"``: Loads from S3-compatible object storage. Bucket name is read from ``AWS_S3_BUCKET`` environment variable. Authentication uses AWS-style credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT) provided via environment variables (e.g. from a Kubernetes
+secret).
+
+- When ``data_source="pvc"``: Loads from a mounted PVC. The ``train_data_key`` is resolved as a path relative to ``pvc_mount_path``.
 
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
-| `file_key` | `str` | `None` | S3 object key of the CSV file. |
-| `bucket_name` | `str` | `None` | S3 bucket name containing the file. |
+| `train_data_key` | `str` | `None` | S3 object key (when data_source="s3") or PVC-relative path (when data_source="pvc") of the CSV file. |
 | `workspace_path` | `str` | `None` | PVC workspace directory where train CSVs will be written. |
 | `label_column` | `str` | `None` | Name of the label/target column in the dataset. |
 | `sampled_test_dataset` | `dsl.Output[dsl.Dataset]` | `None` | Output dataset artifact for the test split. |
 | `component_status` | `dsl.Output[dsl.Artifact]` | `None` | Output artifact containing stage-level progress tracking for this component. |
+| `data_source` | `str` | `s3` | Data source type: "s3" (default) or "pvc". |
 | `sampling_method` | `Optional[str]` | `None` | "first_n_rows", "stratified", or "random"; if None, derived from task_type. |
 | `task_type` | `str` | `regression` | "binary", "multiclass", or "regression" (default); used when sampling_method is None. |
 | `split_config` | `Optional[dict]` | `None` | Split configuration dictionary. Available keys: "test_size" (float), "random_state" (int), "stratify" (bool). |
 | `selection_train_size` | `float` | `0.3` | Fraction of the train portion used for model selection (default 0.3). |
+| `pvc_mount_path` | `str` | `/mnt/data` | Mount path for PVC (default "/mnt/data"). Only used when data_source="pvc". |
 
 ## Outputs 📤
 

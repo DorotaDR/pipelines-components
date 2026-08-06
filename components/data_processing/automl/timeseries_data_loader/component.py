@@ -9,14 +9,14 @@ from kfp_components.utils.consts import AUTOML_IMAGE  # pyright: ignore[reportMi
     install_kfp_package=False,
 )
 def timeseries_data_loader(
-    file_key: str,
-    bucket_name: str,
+    train_data_key: str,
     workspace_path: str,
     target: str,
     id_column: str,
     timestamp_column: str,
     sampled_test_dataset: dsl.Output[dsl.Dataset],
     component_status: dsl.Output[dsl.Artifact],
+    data_source: str = "s3",
     selection_train_size: float = 0.3,
 ) -> NamedTuple(
     "outputs",
@@ -26,9 +26,9 @@ def timeseries_data_loader(
     models_selection_train_data_path=str,
     extra_train_data_path=str,
 ):
-    """Load and split timeseries data from S3 for AutoGluon training.
+    """Load and split timeseries data from S3 or PVC for AutoGluon training.
 
-    This component loads time series data from S3, samples it (up to 100 MB),
+    This component loads time series data from S3 or PVC, samples it (up to 100 MB),
     applies light **cleansing** (replace ``+/-inf`` with NaN so AutoGluon can apply its
     own missing-value logic; require parseable timestamps and non-null ids; drop
     exact duplicate ``(id_column, timestamp_column)`` rows, keep last), then performs a two-stage
@@ -47,15 +47,27 @@ def timeseries_data_loader(
     fails with a clear error so downstream AutoGluon training does not run on datasets too
     small to split reliably.
 
+    **Data source:**
+
+    - When ``data_source="s3"``: Loads from S3-compatible object storage. Bucket name
+      is read from ``AWS_S3_BUCKET`` environment variable. Authentication uses AWS-style
+      credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT) provided
+      via environment variables (e.g. from a Kubernetes secret).
+
+    - When ``data_source="pvc"``: Loads from a mounted PVC at the path specified by
+      ``PVC_MOUNT_PATH`` environment variable. The ``train_data_key`` is resolved as
+      a path relative to ``PVC_MOUNT_PATH``.
+
     Args:
-        file_key: S3 object key of the CSV file containing time series data.
-        bucket_name: S3 bucket name containing the file.
+        train_data_key: S3 object key (when data_source="s3") or PVC-relative path
+            (when data_source="pvc") of the CSV file.
         workspace_path: PVC workspace directory where train CSVs will be written.
         target: Name of the target column to forecast.
         id_column: Name of the column identifying each time series (item_id).
         timestamp_column: Name of the timestamp/datetime column.
         sampled_test_dataset: Output dataset artifact for the test split.
         component_status: Output artifact containing stage-level progress tracking for this component.
+        data_source: Data source type: "s3" (default) or "pvc".
         selection_train_size: Fraction of train portion for model selection (default: 0.3).
 
     Returns:
@@ -79,8 +91,7 @@ def timeseries_data_loader(
 
     # Input validation
     for param, value in (
-        ("bucket_name", bucket_name),
-        ("file_key", file_key),
+        ("train_data_key", train_data_key),
         ("workspace_path", workspace_path),
         ("target", target),
         ("id_column", id_column),
@@ -88,11 +99,19 @@ def timeseries_data_loader(
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{param} must be a non-empty string.")
+
+    if data_source not in ("s3", "pvc"):
+        raise ValueError(f"data_source must be 's3' or 'pvc'; got {data_source!r}.")
+
     if selection_train_size <= 0 or selection_train_size >= 1:
         raise ValueError("selection_train_size must be in a range 0 to 1.")
 
-    if file_key.startswith("/") or file_key.endswith("/") or "//" in file_key:
-        raise ValueError("file_key must be a valid S3 object key and must not start/end with '/' or contain '//'.")
+    if data_source == "s3" and (
+        train_data_key.startswith("/") or train_data_key.endswith("/") or "//" in train_data_key
+    ):
+        raise ValueError(
+            "train_data_key must be a valid S3 object key and must not start/end with '/' or contain '//'."
+        )
 
     from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
 
@@ -135,6 +154,57 @@ def timeseries_data_loader(
                 aws_secret_access_key=secret_key,
                 verify=verify,
             )
+
+        def load_timeseries_data_from_pvc(file_path, max_size_bytes, chunk_size):
+            """Load time series CSV from PVC, truncating to max_size_bytes while preserving order."""
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(
+                    f"CSV file not found at PVC path: {file_path}. "
+                    "Check that PVC_MOUNT_PATH and train_data_key are correct."
+                )
+
+            chunk_list = []
+            accumulated_size = 0
+            total_rows_read = 0
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    for chunk_df in pd.read_csv(f, chunksize=chunk_size):
+                        chunk_memory = chunk_df.memory_usage(deep=True).sum()
+
+                        if accumulated_size + chunk_memory > max_size_bytes:
+                            remaining_bytes = max_size_bytes - accumulated_size
+                            if remaining_bytes <= 0:
+                                break
+                            bytes_per_row = chunk_memory / len(chunk_df) if len(chunk_df) > 0 else 0
+                            if bytes_per_row > 0:
+                                rows_to_take = int(remaining_bytes / bytes_per_row)
+                                if rows_to_take > 0:
+                                    chunk_df = chunk_df.head(rows_to_take)
+                                    chunk_list.append(chunk_df)
+                                    total_rows_read += len(chunk_df)
+                            break
+
+                        chunk_list.append(chunk_df)
+                        accumulated_size += chunk_memory
+                        total_rows_read += len(chunk_df)
+
+                        if accumulated_size >= max_size_bytes:
+                            break
+
+            except Exception as e:
+                if not chunk_list:
+                    raise ValueError(f"Error reading CSV from PVC: {str(e)}") from e
+
+            if not chunk_list:
+                raise ValueError("No data was loaded from PVC. The file may be empty or inaccessible.")
+
+            logger.debug(
+                "PVC chunk read: %s rows (~%.2f MB)",
+                total_rows_read,
+                accumulated_size / (1024**2),
+            )
+            return pd.concat(chunk_list, ignore_index=True)
 
         def load_timeseries_data_truncate(bucket_name, file_key, max_size_bytes, chunk_size):
             """Load time series CSV from S3, truncating to max_size_bytes while preserving order."""
@@ -295,12 +365,36 @@ def timeseries_data_loader(
 
             return out.reset_index(drop=True)
 
-        status.record(
-            "prepare_data",
-            "running",
-            source=f"s3://{bucket_name}/{file_key}",
-        )
-        df = load_timeseries_data_truncate(bucket_name, file_key, MAX_SIZE_BYTES, PANDAS_CHUNK_SIZE)
+        # Load data from S3 or PVC based on data_source
+        if data_source == "s3":
+            bucket_name = os.environ.get("AWS_S3_BUCKET")
+            if not bucket_name:
+                raise ValueError(
+                    "AWS_S3_BUCKET environment variable is required when data_source='s3'. "
+                    "Ensure the secret contains AWS_S3_BUCKET key."
+                )
+            status.record(
+                "prepare_data",
+                "running",
+                source=f"s3://{bucket_name}/{train_data_key}",
+            )
+            df = load_timeseries_data_truncate(bucket_name, train_data_key, MAX_SIZE_BYTES, PANDAS_CHUNK_SIZE)
+        elif data_source == "pvc":
+            pvc_mount_path = os.environ.get("PVC_MOUNT_PATH")
+            if not pvc_mount_path:
+                raise ValueError(
+                    "PVC_MOUNT_PATH environment variable is required when data_source='pvc'. "
+                    "Ensure the secret contains PVC_MOUNT_PATH key."
+                )
+            file_path = os.path.join(pvc_mount_path, train_data_key)
+            status.record(
+                "prepare_data",
+                "running",
+                source=f"pvc://{file_path}",
+            )
+            df = load_timeseries_data_from_pvc(file_path, MAX_SIZE_BYTES, PANDAS_CHUNK_SIZE)
+        else:
+            raise ValueError(f"Unsupported data_source: {data_source}")
 
         required_columns = {id_column, timestamp_column, target}
         missing_columns = required_columns - set(df.columns)
@@ -411,10 +505,8 @@ def timeseries_data_loader(
         )
 
         logger.info(
-            "Timeseries loader: %s rows from s3://%s/%s; split selection=%s extra=%s test=%s",
+            "Timeseries loader: %s rows; split selection=%s extra=%s test=%s",
             len(df),
-            bucket_name,
-            file_key,
             len(selection_train_df),
             len(extra_train_df),
             len(test_df),

@@ -6,22 +6,29 @@
 
 AutoGluon time series training pipeline.
 
-Trains AutoGluon TimeSeries models on data loaded from S3, scores candidates on a per-series temporal holdout, refits the top models on the full train portion (selection + extra splits), and aggregates metrics into a leaderboard.
+Trains AutoGluon TimeSeries models on data loaded from S3 or PVC, scores candidates on a per-series temporal holdout, refits the top models on the full train portion (selection + extra splits), and aggregates metrics into a leaderboard.
 
 **Compiled pipeline encoding:** Keep this module ASCII-only (no Unicode in docstrings or string literals). Some deployments persist compiled pipeline YAML in MySQL ``utf8`` columns, which reject multi-byte characters.
 
 Storage strategy:
 
-Train and test CSV splits are produced on the PVC workspace (``PipelineConfig.workspace``) so steps can read shared paths without re-downloading. The per-series test split is also exposed as a dataset artifact. S3 credentials for the initial load are supplied via the Kubernetes secret
-``train_data_secret_name``.
+Train and test CSV splits are produced on the PVC workspace (``PipelineConfig.workspace``) so steps can read shared paths without re-downloading. The per-series test split is also exposed as a dataset artifact.
+
+**Data source support:**
+
+Input training data can be loaded from either S3-compatible object storage or an existing Kubernetes PersistentVolumeClaim (PVC). The data source is auto-detected from the secret credentials:
+
+- **S3**: Secret must contain AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, and AWS_S3_BUCKET. - **PVC**: Secret must contain PVC_NAME and PVC_MOUNT_PATH.
+
+The pipeline automatically detects which credential set is present and configures the data loader accordingly. For PVC sources, the input volume is mounted at /mnt/data on the data loader pod.
 
 Pipeline stages:
 
 0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP artifact for dashboards before data loading.
 
-1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 (up to 100 MB), replaces ``+/-inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps and non-null ids, deduplicates ``(id_column, timestamp_column)``, then applies a two-stage **per-series
-temporal** split on ``id_column`` / ``timestamp_column``: default **80/20** train vs test per series, then **30/70** of each series' train rows into ``models_selection_train_dataset.csv`` and ``extra_train_dataset.csv`` under ``{workspace_path}/datasets/``. The test split is written to the
-``sampled_test_dataset`` artifact.
+1. **Data loading & splitting** (``timeseries_data_loader``): Loads CSV from S3 or PVC (up to 100 MB), replaces ``+/-inf`` with NaN (missing targets stay for AutoGluon), requires parseable timestamps and non-null ids, deduplicates ``(id_column, timestamp_column)``, then applies a two-stage
+**per-series temporal** split on ``id_column`` / ``timestamp_column``: default **80/20** train vs test per series, then **30/70** of each series' train rows into ``models_selection_train_dataset.csv`` and ``extra_train_dataset.csv`` under ``{workspace_path}/datasets/``. The test split is written to
+the ``sampled_test_dataset`` artifact.
 
 2. **Model generation + full refit** (``autogluon_timeseries_models_training``): Trains multiple AutoGluon TimeSeries models on the selection split, picks top ``top_n``, and refits each selected model on the full train portion (**selection + extra** splits). The component writes all refitted models
 to a single combined ``models_artifact``.
@@ -30,9 +37,8 @@ to a single combined ``models_artifact``.
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
-| `train_data_secret_name` | `str` | `None` | Kubernetes secret name containing S3 credentials (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_DEFAULT_REGION). |
-| `train_data_bucket_name` | `str` | `None` | S3-compatible bucket name containing the time series data file. |
-| `train_data_file_key` | `str` | `None` | S3 object key of the data file (CSV or Parquet). File must include columns for item_id, timestamp, and target; optional columns for known covariates. |
+| `train_data_secret_name` | `str` | `None` | Kubernetes secret name with S3 or PVC credentials. For S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_S3_BUCKET, AWS_DEFAULT_REGION (optional). For PVC: PVC_NAME, PVC_MOUNT_PATH. |
+| `train_data_key` | `str` | `None` | S3 object key (e.g., "timeseries/sales.csv") or PVC-relative path (e.g., "timeseries/sales.csv" resolves to /mnt/data/timeseries/sales.csv). File must include columns for item_id, timestamp, and target; optional columns for known covariates. |
 | `target` | `str` | `None` | Name of the column containing the numeric values to forecast. Corresponds to :attr:`~autogluon.timeseries.TimeSeriesDataFrame` target column. |
 | `id_column` | `str` | `None` | Name of the column that identifies each time series (e.g. product_id, store_id). Passed as ``id_column`` when constructing TimeSeriesDataFrame; result uses ``item_id``. |
 | `timestamp_column` | `str` | `None` | Name of the column containing the timestamp/datetime for each observation. Passed as ``timestamp_column`` when constructing TimeSeriesDataFrame; result uses ``timestamp`` as the second index level. |

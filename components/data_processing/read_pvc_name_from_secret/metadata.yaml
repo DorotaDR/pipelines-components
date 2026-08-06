@@ -1,0 +1,13 @@
+name: read_pvc_name_from_secret
+stability: alpha
+dependencies:
+  kubeflow:
+    - name: Pipelines
+      version: ">=2.15.2"
+lastVerified: 2026-07-02T00:00:00Z
+tags:
+  - pvc
+  - configuration
+  - helper
+links:
+  adr: https://github.com/red-hat-data-services/pipelines-components/blob/main/.adr/automl/features/pvc_data_source.md

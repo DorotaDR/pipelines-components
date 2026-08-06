@@ -15,13 +15,21 @@ This pipeline implements an efficient two-stage training approach for AutoGluon 
 Training datasets are stored on a PVC workspace (not S3 artifacts) so that all pipeline steps sharing the workspace can access them without extra downloads. Only the test dataset is written to an S3 artifact (for use by the leaderboard evaluation component). The workspace is provisioned via
 ``PipelineConfig.workspace``.
 
+**Data source support:**
+
+Input training data can be loaded from either S3-compatible object storage or an existing Kubernetes PersistentVolumeClaim (PVC). The data source is auto-detected from the secret credentials:
+
+- **S3**: Secret must contain AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, and AWS_S3_BUCKET. - **PVC**: Secret must contain PVC_NAME.
+
+The pipeline automatically detects which credential set is present and configures the data loader accordingly. For PVC sources, the input volume is mounted at the path defined by the PVC_MOUNT_PATH constant (default: /mnt/data) on the data loader pod.
+
 **Pipeline Stages:**
 
 0. **Component stage map**: Publishes the static component-to-stage-to-step map as a KFP artifact for dashboards before any data I/O.
 
-1. **Data Loading & Splitting**: Loads tabular (CSV) data from an S3-compatible object storage bucket using AWS credentials configured via Kubernetes secrets. The component samples the data (up to 1GB), then performs a two-stage split: *Primary split** (default 80/20): separates a *test set* (20%,
-written to an S3 artifact) from the *train portion* (80%). **Secondary split** (default 30/70 of the train portion): produces ``models_selection_train_dataset.csv`` (30%, used for model selection) and ``extra_train_dataset.csv`` (70%, passed to ``refit_full`` as extra data). Both train CSVs are
-written to the PVC workspace under ``{workspace_path}/datasets/``. For classification tasks the splits are stratified by the label column.
+1. **Data Loading & Splitting**: Loads tabular (CSV) data from S3 or PVC. The component samples the data (up to 1GB), then performs a two-stage split: *Primary split** (default 80/20): separates a *test set* (20%, written to an S3 artifact) from the *train portion* (80%). **Secondary split**
+(default 30/70 of the train portion): produces ``models_selection_train_dataset.csv`` (30%, used for model selection) and ``extra_train_dataset.csv`` (70%, passed to ``refit_full`` as extra data). Both train CSVs are written to the PVC workspace under ``{workspace_path}/datasets/``. For
+classification tasks the splits are stratified by the label column.
 
 2. **Model Training & Refitting**: Trains multiple AutoGluon models on the *selection train* data using stacking (1 level) and bagging (4 folds). All models are evaluated on the test set and ranked by performance. The top N models are selected and refitted sequentially on the full training data via
 ``refit_full``. Each refitted model is saved with a ``_FULL`` suffix and optimized for deployment. All model artifacts are stored under a single output artifact, avoiding a ``ParallelFor`` loop in the pipeline.
@@ -50,9 +58,8 @@ The pipeline leverages AutoGluon's unique ensembling strategy that combines mult
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
-| `train_data_secret_name` | `str` | `None` | Kubernetes secret name with S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_DEFAULT_REGION). |
-| `train_data_bucket_name` | `str` | `None` | S3-compatible bucket name containing the tabular data file. |
-| `train_data_file_key` | `str` | `None` | S3 object key of the CSV file (features and target column). |
+| `train_data_secret_name` | `str` | `None` | Kubernetes secret name with S3 or PVC credentials. For S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_S3_BUCKET, AWS_DEFAULT_REGION (optional). For PVC: PVC_NAME. |
+| `train_data_key` | `str` | `None` | S3 object key (e.g., "datasets/data.csv") or PVC-relative path (e.g., "datasets/data.csv" resolves to {PVC_MOUNT_PATH}/datasets/data.csv). |
 | `label_column` | `str` | `None` | Name of the target/label column in the dataset. |
 | `task_type` | `str` | `None` | "binary", "multiclass", or "regression"; drives metrics and model types. |
 | `top_n` | `int` | `3` | Number of top models to select and refit (default: 3); positive integer from range [1, 10]. |
