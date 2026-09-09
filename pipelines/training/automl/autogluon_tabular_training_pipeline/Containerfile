@@ -19,18 +19,19 @@ RUN pip install --no-cache-dir --no-deps /tmp/kfp_components-*.whl
 COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.in /tmp/
 
 # TEMPORARY (test only): install autogluon from git fork; all other deps from requirements.in
+# AIPCC base images are non-root and have no dnf repos, so fetch source via GitHub archive (no git).
 ARG AUTOGLUON_GIT_REPO=https://github.com/DorotaDR/autogluon.git
 ARG AUTOGLUON_GIT_BRANCH=remove-fastcore-limitation-rhai.v6
-RUN dnf install -y git && dnf clean all
 RUN grep -v '^autogluon' /tmp/requirements.in > /tmp/requirements-no-autogluon.in && \
     pip install --no-cache-dir -r /tmp/requirements-no-autogluon.in && \
-    git clone --depth 1 --branch "${AUTOGLUON_GIT_BRANCH}" "${AUTOGLUON_GIT_REPO}" /tmp/autogluon && \
+    curl -fsSL "${AUTOGLUON_GIT_REPO%.git}/archive/refs/heads/${AUTOGLUON_GIT_BRANCH}.tar.gz" -o /tmp/autogluon.tar.gz && \
+    tar -xzf /tmp/autogluon.tar.gz -C /tmp && \
     pip install --no-cache-dir \
-        /tmp/autogluon/common \
-        /tmp/autogluon/core \
-        /tmp/autogluon/features \
-        "/tmp/autogluon/tabular[lightgbm,xgboost,tabm,fastai]" \
-        /tmp/autogluon/timeseries && \
-    rm -rf /tmp/autogluon
+        "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}/common" \
+        "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}/core" \
+        "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}/features" \
+        "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}/tabular[lightgbm,xgboost,tabm,fastai]" \
+        "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}/timeseries" && \
+    rm -rf /tmp/autogluon.tar.gz "/tmp/autogluon-${AUTOGLUON_GIT_BRANCH}"
 RUN pip check
 
