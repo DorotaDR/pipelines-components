@@ -1,4 +1,4 @@
-ARG BASE_IMAGE="quay.io/aipcc/base-images/cpu:3.5.0"
+ARG BASE_IMAGE="quay.io/aipcc/base-images/cpu-el9.8:3.6.0-ea.2"
 
 ## Build stage: build a kfp-components wheel from the local source tree
 FROM ${BASE_IMAGE} AS builder
@@ -16,9 +16,21 @@ FROM ${BASE_IMAGE}
 COPY --from=builder /tmp/dist/kfp_components-*.whl /tmp/
 RUN pip install --no-cache-dir --no-deps /tmp/kfp_components-*.whl
 
-COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.txt /tmp/
+COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.in /tmp/
 
-## Ensure build isolation
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# TEMPORARY (test only): install autogluon from git fork; all other deps from requirements.in
+ARG AUTOGLUON_GIT_REPO=https://github.com/DorotaDR/autogluon.git
+ARG AUTOGLUON_GIT_BRANCH=remove-fastcore-limitation-rhai.v6
+RUN dnf install -y git && dnf clean all
+RUN grep -v '^autogluon' /tmp/requirements.in > /tmp/requirements-no-autogluon.in && \
+    pip install --no-cache-dir -r /tmp/requirements-no-autogluon.in && \
+    git clone --depth 1 --branch "${AUTOGLUON_GIT_BRANCH}" "${AUTOGLUON_GIT_REPO}" /tmp/autogluon && \
+    pip install --no-cache-dir \
+        /tmp/autogluon/common \
+        /tmp/autogluon/core \
+        /tmp/autogluon/features \
+        "/tmp/autogluon/tabular[lightgbm,xgboost,tabm,fastai]" \
+        /tmp/autogluon/timeseries && \
+    rm -rf /tmp/autogluon
 RUN pip check
 
