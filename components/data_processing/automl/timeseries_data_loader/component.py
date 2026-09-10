@@ -22,6 +22,7 @@ def timeseries_data_loader(
     known_covariates_names: Optional[List[str]] = None,
     test_data_bucket_name: str = "",
     test_data_file_key: str = "",
+    preset: str = "speed",
 ) -> NamedTuple(
     "outputs",
     sample_config=dict,
@@ -34,7 +35,8 @@ def timeseries_data_loader(
 ):
     """Load and split timeseries data from S3 for AutoGluon training.
 
-    This component loads time series data from S3, samples it (up to 100 MB),
+    This component loads time series data from S3, samples it (up to 100 MB for the
+    ``"speed"`` preset, up to 1 GB for ``"balanced"``),
     applies light **cleansing** (replace ``+/-inf`` with NaN so AutoGluon can apply its
     own missing-value logic; require parseable timestamps and non-null ids; drop
     exact duplicate ``(id_column, timestamp_column)`` rows, keep last), then performs a two-stage
@@ -71,6 +73,9 @@ def timeseries_data_loader(
             Only used to fail fast when a user-provided test dataset omits one of them.
         test_data_bucket_name: S3 bucket name for user-provided test dataset (default: empty string).
         test_data_file_key: S3 object key of the user-provided test CSV (default: empty string).
+        preset: Training quality tier controlling the sampling size budget. ``"speed"``
+            (default) samples up to 100 MB; ``"balanced"`` samples up to 1 GB. The cap for
+            user-provided test datasets (50 MB) is unaffected by this setting.
 
     Raises:
         ValueError: If a required parameter is empty or invalid, if only one of the
@@ -104,11 +109,21 @@ def timeseries_data_loader(
         validate_test_data_params,
     )
 
-    MAX_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+    VALID_PRESETS = {"speed", "balanced"}
+    # Sampling budget per quality tier: "speed" stays small for fast runs,
+    # "balanced" allows the full supported dataset size.
+    PRESET_MAX_SIZE_BYTES = {
+        "speed": 100 * 1024 * 1024,  # 100 MB
+        "balanced": 1024 * 1024 * 1024,  # 1 GB
+    }
     TEST_DATA_MAX_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB — smaller cap for user-provided holdout sets
     MIN_VALID_RECORDS_AFTER_CLEANSING = 100
     PANDAS_CHUNK_SIZE = 10000  # Rows per batch for streaming read
     DEFAULT_TEST_SIZE = 0.2
+
+    if preset not in VALID_PRESETS:
+        raise ValueError(f"preset must be one of {sorted(VALID_PRESETS)}; got {preset!r}.")
+    MAX_SIZE_BYTES = PRESET_MAX_SIZE_BYTES[preset]
 
     SYNTHETIC_ITEM_ID_COLUMN = "__synthetic_item_id"
     SYNTHETIC_ITEM_ID_VALUE = "item_0"
@@ -161,6 +176,13 @@ def timeseries_data_loader(
         status.set_metadata(display_name="Timeseries Data Loader Status")
         component_status.metadata["display_name"] = "Timeseries Data Loader Status"
         status.record("prepare_data", "started")
+
+        logger.info(
+            "Sampling size budget: preset=%s, max_size=%s bytes (%.0f MB)",
+            preset,
+            MAX_SIZE_BYTES,
+            MAX_SIZE_BYTES / (1024**2),
+        )
 
         def get_s3_client(verify=True):
             """Create and return an S3 client using credentials from environment variables."""

@@ -21,6 +21,7 @@ def automl_data_loader(  # noqa: D417
     selection_train_size: float = 0.3,
     test_data_bucket_name: str = "",
     test_data_file_key: str = "",
+    preset: str = "speed",
 ) -> NamedTuple(
     "outputs",
     sample_config=dict,
@@ -31,8 +32,9 @@ def automl_data_loader(  # noqa: D417
 ):
     """Automl Data Loader component.
 
-    Loads tabular (CSV) data from S3 in batches, sampling up to 100 MB of data,
-    then splits the sampled data into test, selection-train, and extra-train sets.
+    Loads tabular (CSV) data from S3 in batches, sampling up to a preset-dependent
+    size budget (``"speed"``: 100 MB, ``"balanced"``: 1 GB), then splits the sampled
+    data into test, selection-train, and extra-train sets.
 
     The component reads data in chunks to efficiently handle large files without
     loading the entire dataset into memory at once. After sampling, it performs
@@ -78,9 +80,12 @@ def automl_data_loader(  # noqa: D417
         selection_train_size: Fraction of the train portion used for model selection (default 0.3).
         test_data_bucket_name: S3 bucket name for user-provided test dataset (default: empty string).
         test_data_file_key: S3 object key of the user-provided test CSV (default: empty string).
+        preset: Training quality tier controlling the sampling size budget. ``"speed"``
+            (default) samples up to 100 MB; ``"balanced"`` samples up to 1 GB. The cap for
+            user-provided test datasets (50 MB) is unaffected by this setting.
 
     Raises:
-        ValueError: If sampling_method or task_type is invalid, if required parameters are missing,
+        ValueError: If sampling_method, task_type, or preset is invalid, if required parameters are missing,
             if only one of the ``test_data_*`` pair is set or the test key is not a valid S3 object key,
             if the test dataset is empty or missing the label or a training feature column, or if
             fewer than 100 valid records remain after data cleansing.
@@ -108,13 +113,23 @@ def automl_data_loader(  # noqa: D417
 
     logger = logging.getLogger(__name__)
 
-    MAX_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+    VALID_PRESETS = {"speed", "balanced"}
+    # Sampling budget per quality tier: "speed" stays small for fast runs,
+    # "balanced" allows the full supported dataset size.
+    PRESET_MAX_SIZE_BYTES = {
+        "speed": 100 * 1024 * 1024,  # 100 MB
+        "balanced": 1024 * 1024 * 1024,  # 1 GB
+    }
     TEST_DATA_MAX_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB — smaller cap for user-provided holdout sets
     MIN_VALID_RECORDS_AFTER_CLEANSING = 100
     PANDAS_CHUNK_SIZE = 10000  # Rows per batch for streaming read
     DEFAULT_RANDOM_STATE = 42
     VALID_SAMPLING_METHODS = {"first_n_rows", "stratified", "random"}
     VALID_TASK_TYPES = {"binary", "multiclass", "regression"}
+
+    if preset not in VALID_PRESETS:
+        raise ValueError(f"preset must be one of {sorted(VALID_PRESETS)}; got {preset!r}.")
+    MAX_SIZE_BYTES = PRESET_MAX_SIZE_BYTES[preset]
 
     # Input validation
     for param, value in (
@@ -153,6 +168,13 @@ def automl_data_loader(  # noqa: D417
         status.set_metadata(display_name="Data Loader Status")
         component_status.metadata["display_name"] = "Data Loader Status"
         status.record("prepare_data", "started")
+
+        logger.info(
+            "Sampling size budget: preset=%s, max_size=%s bytes (%.0f MB)",
+            preset,
+            MAX_SIZE_BYTES,
+            MAX_SIZE_BYTES / (1024**2),
+        )
 
         if sampling_method is None:
             if task_type in ("binary", "multiclass"):
