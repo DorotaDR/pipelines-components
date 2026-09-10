@@ -11,13 +11,14 @@ component end-to-end, so it requires:
 * ``uv sync --extra dev`` (boto3, pandas, sklearn available), and
 * S3 credentials + dataset locations provided via environment variables.
 
-Run only these tests explicitly (they are excluded from default collection):
+Configuration is read from a ``.env`` file (see ``.env.example`` in this directory);
+the repo-root ``.env`` is loaded first, then this directory's ``.env`` overrides it.
+Real environment variables set in the shell always win over both. Copy the template
+and run:
 
-    # binary + stratified and regression + random, one per dataset
-    BENCH_BUCKET=my-bucket \
-    BENCH_BINARY_KEY=path/to/binary.csv       BENCH_BINARY_LABEL=target \
-    BENCH_REGRESSION_KEY=path/to/regression.csv BENCH_REGRESSION_LABEL=price \
-    AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_S3_ENDPOINT=https://... \
+    cp components/data_processing/automl/tabular_data_loader/tests/.env.example \
+       components/data_processing/automl/tabular_data_loader/tests/.env
+    # edit .env, then:
     uv run pytest components/data_processing/automl/tabular_data_loader/tests/test_component_benchmark.py \
         -m integration -v -s --log-cli-level=DEBUG
 
@@ -33,20 +34,43 @@ import pytest
 
 from ..component import automl_data_loader
 
-# --- Configuration (override via environment variables) -----------------------
-# Bucket holding both benchmark datasets.
-BENCH_BUCKET = os.environ.get("BENCH_BUCKET") or os.environ.get("AWS_S3_BUCKET")
-
-# Dataset 1: classification -> binary task, stratified sampling.
-BENCH_BINARY_KEY = os.environ.get("BENCH_BINARY_KEY")
-BENCH_BINARY_LABEL = os.environ.get("BENCH_BINARY_LABEL")
-
-# Dataset 2: regression task, random sampling.
-BENCH_REGRESSION_KEY = os.environ.get("BENCH_REGRESSION_KEY")
-BENCH_REGRESSION_LABEL = os.environ.get("BENCH_REGRESSION_LABEL")
-
 # S3 credentials the component reads from the environment (see get_s3_client).
 _REQUIRED_S3_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT")
+
+_dotenv_loaded = False
+
+
+def _ensure_dotenv_loaded() -> None:
+    """Load .env from repo root (cwd) and from this directory (import guard: not at module scope).
+
+    Values already present in the real environment are preserved: ``load_dotenv``
+    does not override them unless ``override=True`` is passed, so a shell export
+    still beats the file. The directory-local ``.env`` overrides the repo-root one.
+    """
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    _dotenv_loaded = True
+
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    from pathlib import Path
+
+    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+
+
+def _env(name: str, *fallbacks: str):
+    """Return the first non-empty value for ``name``/``fallbacks`` after loading .env."""
+    _ensure_dotenv_loaded()
+    for key in (name, *fallbacks):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
 
 
 class _Artifact:
@@ -59,7 +83,13 @@ class _Artifact:
 
 
 def _missing_s3_env() -> list[str]:
+    _ensure_dotenv_loaded()
     return [name for name in _REQUIRED_S3_ENV if not os.environ.get(name)]
+
+
+def _bench_bucket():
+    """Bucket holding both benchmark datasets."""
+    return _env("BENCH_BUCKET", "AWS_S3_BUCKET")
 
 
 def _s3_object_size_bytes(file_key: str):
@@ -73,7 +103,7 @@ def _s3_object_size_bytes(file_key: str):
         aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
         aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
     )
-    head = s3_client.head_object(Bucket=BENCH_BUCKET, Key=file_key)
+    head = s3_client.head_object(Bucket=_bench_bucket(), Key=file_key)
     return head["ContentLength"]
 
 
@@ -84,8 +114,13 @@ def _run_and_time(
     label_column: str,
     task_type: str,
     sampling_method: str,
+    preset: str = "balanced",
 ):
-    """Invoke the real component against S3 and return (result, elapsed_seconds)."""
+    """Invoke the real component against S3 and return (result, elapsed_seconds).
+
+    Defaults to the ``"balanced"`` preset so the benchmark exercises the 1 GB
+    sampling budget; pass ``preset="speed"`` to measure the 100 MB path instead.
+    """
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -101,13 +136,14 @@ def _run_and_time(
     start = time.perf_counter()
     result = automl_data_loader.python_func(
         file_key=file_key,
-        bucket_name=BENCH_BUCKET,
+        bucket_name=_bench_bucket(),
         workspace_path=str(workspace),
         label_column=label_column,
         sampled_test_dataset=sampled_test_dataset,
         component_status=component_status,
         sampling_method=sampling_method,
         task_type=task_type,
+        preset=preset,
     )
     elapsed = time.perf_counter() - start
 
@@ -120,8 +156,8 @@ def _run_and_time(
         throughput = "n/a"
         size_str = "unknown"
     print(
-        f"\n[benchmark] task_type={task_type} sampling_method={sampling_method} "
-        f"key=s3://{BENCH_BUCKET}/{file_key}\n"
+        f"\n[benchmark] task_type={task_type} sampling_method={sampling_method} preset={preset} "
+        f"key=s3://{_bench_bucket()}/{file_key}\n"
         f"[benchmark]   object_size={size_str}\n"
         f"[benchmark]   elapsed={elapsed:.1f}s  throughput={throughput}  sampled_rows={n_samples}"
     )
@@ -137,13 +173,14 @@ class TestTabularDataLoaderBenchmark:
         missing = _missing_s3_env()
         if missing:
             pytest.skip(f"Missing S3 env vars: {', '.join(missing)}")
-        if not (BENCH_BUCKET and BENCH_BINARY_KEY and BENCH_BINARY_LABEL):
+        bucket, key, label = _bench_bucket(), _env("BENCH_BINARY_KEY"), _env("BENCH_BINARY_LABEL")
+        if not (bucket and key and label):
             pytest.skip("Set BENCH_BUCKET, BENCH_BINARY_KEY, BENCH_BINARY_LABEL to run.")
 
         result, elapsed = _run_and_time(
             tmp_path=tmp_path,
-            file_key=BENCH_BINARY_KEY,
-            label_column=BENCH_BINARY_LABEL,
+            file_key=key,
+            label_column=label,
             task_type="binary",
             sampling_method="stratified",
         )
@@ -154,13 +191,14 @@ class TestTabularDataLoaderBenchmark:
         missing = _missing_s3_env()
         if missing:
             pytest.skip(f"Missing S3 env vars: {', '.join(missing)}")
-        if not (BENCH_BUCKET and BENCH_REGRESSION_KEY and BENCH_REGRESSION_LABEL):
+        bucket, key, label = _bench_bucket(), _env("BENCH_REGRESSION_KEY"), _env("BENCH_REGRESSION_LABEL")
+        if not (bucket and key and label):
             pytest.skip("Set BENCH_BUCKET, BENCH_REGRESSION_KEY, BENCH_REGRESSION_LABEL to run.")
 
         result, elapsed = _run_and_time(
             tmp_path=tmp_path,
-            file_key=BENCH_REGRESSION_KEY,
-            label_column=BENCH_REGRESSION_LABEL,
+            file_key=key,
+            label_column=label,
             task_type="regression",
             sampling_method="random",
         )
