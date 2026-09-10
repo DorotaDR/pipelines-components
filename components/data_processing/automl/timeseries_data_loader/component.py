@@ -98,6 +98,28 @@ def timeseries_data_loader(
 
     logger = logging.getLogger(__name__)
 
+    def _log_dataset_stats(name, df):
+        """Log the size of a dataframe: rows, columns, and in-memory bytes.
+
+        ``memory_usage(deep=True)`` reports the pandas in-memory footprint, which
+        differs from the on-disk CSV size; it is the figure that matters for the
+        sampling budget and the pod memory limit.
+        """
+        try:
+            n_rows = len(df)
+            n_cols = df.shape[1] if hasattr(df, "shape") else len(df.columns)
+            n_bytes = int(df.memory_usage(deep=True).sum())
+            logger.info(
+                "Dataset stats [%s]: rows=%s, columns=%s, size=%s bytes (%.2f MB)",
+                name,
+                n_rows,
+                n_cols,
+                n_bytes,
+                n_bytes / (1024**2),
+            )
+        except Exception as e:  # noqa: BLE001 - stats logging must never break the run
+            logger.debug("Could not compute dataset stats for %s: %s", name, e)
+
     from kfp_components.components.training.automl.shared.component_status import ComponentStatusTracker
     from kfp_components.components.training.automl.shared.user_test_data import (
         raise_if_test_data_empty,
@@ -454,6 +476,7 @@ def timeseries_data_loader(
             )
 
         df = _clean_timeseries_dataframe(df, id_column, timestamp_column, logger)
+        _log_dataset_stats("loaded (after cleansing)", df)
 
         n_valid = len(df)
         if n_valid < MIN_VALID_RECORDS_AFTER_CLEANSING:
@@ -668,6 +691,13 @@ def timeseries_data_loader(
                 "test_size": test_size,
                 "selection_train_size": selection_train_size,
             }
+
+        _log_dataset_stats("split: selection_train", selection_train_df)
+        _log_dataset_stats("split: extra_train", extra_train_df)
+        _log_dataset_stats(
+            "split: test (user-provided)" if has_user_test_data else "split: test",
+            test_data_for_sample,
+        )
 
         # Common post-split: write selection-train and extra-train CSVs to workspace
         selection_path = datasets_dir / "models_selection_train_dataset.csv"

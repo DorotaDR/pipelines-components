@@ -113,6 +113,28 @@ def automl_data_loader(  # noqa: D417
 
     logger = logging.getLogger(__name__)
 
+    def _log_dataset_stats(name, df):
+        """Log the size of a dataframe: rows, columns, and in-memory bytes.
+
+        ``memory_usage(deep=True)`` reports the pandas in-memory footprint, which
+        differs from the on-disk CSV size; it is the figure that matters for the
+        sampling budget and the pod memory limit.
+        """
+        try:
+            n_rows = len(df)
+            n_cols = df.shape[1] if hasattr(df, "shape") else len(df.columns)
+            n_bytes = int(df.memory_usage(deep=True).sum())
+            logger.info(
+                "Dataset stats [%s]: rows=%s, columns=%s, size=%s bytes (%.2f MB)",
+                name,
+                n_rows,
+                n_cols,
+                n_bytes,
+                n_bytes / (1024**2),
+            )
+        except Exception as e:  # noqa: BLE001 - stats logging must never break the run
+            logger.debug("Could not compute dataset stats for %s: %s", name, e)
+
     VALID_PRESETS = {"speed", "balanced"}
     # Sampling budget per quality tier: "speed" stays small for fast runs,
     # "balanced" allows the full supported dataset size.
@@ -446,6 +468,7 @@ def automl_data_loader(  # noqa: D417
             file_key,
             sampling_method,
         )
+        _log_dataset_stats("loaded (after cleansing)", sampled_dataframe)
         status.record(
             "prepare_data",
             "completed",
@@ -583,6 +606,13 @@ def automl_data_loader(  # noqa: D417
 
         X_y_sel = pd.concat([X_sel, y_sel], axis=1)
         X_y_extra = pd.concat([X_extra, y_extra], axis=1)
+
+        _log_dataset_stats("split: selection_train", X_y_sel)
+        _log_dataset_stats("split: extra_train", X_y_extra)
+        _log_dataset_stats(
+            "split: test (user-provided)" if has_user_test_data else "split: test",
+            test_sample_df,
+        )
 
         if len(X_y_sel) == 0:
             raise ValueError(
