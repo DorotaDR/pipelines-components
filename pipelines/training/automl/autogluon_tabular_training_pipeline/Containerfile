@@ -16,9 +16,21 @@ FROM ${BASE_IMAGE}
 COPY --from=builder /tmp/dist/kfp_components-*.whl /tmp/
 RUN pip install --no-cache-dir --no-deps /tmp/kfp_components-*.whl
 
-COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.txt /tmp/
+COPY pipelines/training/automl/autogluon_tabular_training_pipeline/requirements.in /tmp/
 
-## Ensure build isolation
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# These two dependencies are not available at the versions needed by the
+# AutoGluon branch in the RHOAI index. Install only their wheels from PyPI;
+# pip resolves their dependencies with the rest from the RHOAI index below.
+RUN pip install --no-cache-dir --no-deps --index-url https://pypi.org/simple/ \
+      'gluonts>=0.17,<0.18' 'xgboost-cpu<3.4'
+
+# Resolve the non-AutoGluon dependencies from the RHOAI index in requirements.in
+# and build the AutoGluon family from the same GitHub branch.
+RUN sed '/^autogluon\./d' /tmp/requirements.in > /tmp/requirements-poc.in && \
+    pip install --no-cache-dir -r /tmp/requirements-poc.in \
+      'autogluon.common @ git+https://github.com/DorotaDR/autogluon.git@prepare-v1.6.3+rhaiv.1#subdirectory=common' \
+      'autogluon.core @ git+https://github.com/DorotaDR/autogluon.git@prepare-v1.6.3+rhaiv.1#subdirectory=core' \
+      'autogluon.features @ git+https://github.com/DorotaDR/autogluon.git@prepare-v1.6.3+rhaiv.1#subdirectory=features' \
+      'autogluon.tabular[lightgbm,xgboost,tabm,fastai] @ git+https://github.com/DorotaDR/autogluon.git@prepare-v1.6.3+rhaiv.1#subdirectory=tabular' \
+      'autogluon.timeseries @ git+https://github.com/DorotaDR/autogluon.git@prepare-v1.6.3+rhaiv.1#subdirectory=timeseries'
 RUN pip check
-
