@@ -1,6 +1,7 @@
 --index-url https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8-test/simple
 
 kfp==2.17.0
+docling-core @ https://packages.redhat.com/api/pulp-content/public-rhai/rhoai/3.6/cpu-ubi9-test/docling_core-2.96.0-1-py3-none-any.whl#sha256=b0d447deea1cb878a806861b431a4ff70f3cc291832174b7200681a13be35554
 ai4rag[text-extraction]==0.20.0
 # RapidOCR ships no inference engine of its own; Docling's OCR stage fails with
 # "onnxruntime is not installed" unless the runtime is pulled in explicitly.
