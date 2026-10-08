@@ -214,8 +214,8 @@ fastai==2.8.12 \
 fastapi==0.142.2 \
     --hash=sha256:e9b99ab80fab51f6f7436d98d6090083baf6c625cc357619b43597078a9d3eab
     # via mlflow-skinny
-fastcore==2.2.32 \
-    --hash=sha256:31440d373ccd448a23571885717adf9095bffd3845ab53f49dd25301b05d3bd9
+fastcore==2.2.33 \
+    --hash=sha256:695222aad0d080e7d4dd80f1cad9f305a0140817ef445583b7b6ca7451deec7d
     # via
     #   fastai
     #   fastdownload
@@ -974,10 +974,11 @@ tabulate==0.10.0 \
 tensorboard==2.20.0 \
     --hash=sha256:c92ce27d81f25b750f2d164487dcd0546224d43405a1d73fa5924e3a36501231
     # via autogluon-timeseries
-tensorboard-data-server==0.7.2 \
-    --hash=sha256:5b5ca067ff01fb0fd9bc849ec755e01e357fb12fd277b31ff5e5563efea343ec \
-    --hash=sha256:5dcd5f1d0e8fade78cef00360d18b6ab45db329d63ffc420c747d1879da5d4c0
-    # via tensorboard
+tensorboard-data-server @ https://packages.redhat.com/api/pulp-content/public-rhai/rhoai/3.6/cpu-ubi9-test/tensorboard_data_server-0.7.2-2-py3-none-any.whl#sha256=130cff9638dab874f85c86c6be2416d494fc9967c1e13f6ad914f5a52c24f5e1 \
+    --hash=sha256:130cff9638dab874f85c86c6be2416d494fc9967c1e13f6ad914f5a52c24f5e1
+    # via
+    #   -r requirements.in
+    #   tensorboard
 thinc==8.3.13 \
     --hash=sha256:0c4f9bb9d0c22cb122a2a6629128157e54d35537d79bf6ccbcaadcd83e8eb6b5 \
     --hash=sha256:5e998127ad326d2e102d51424703685d104f4695eb01acf3582a8187004c6e62 \
@@ -1189,10 +1190,12 @@ wrapt==2.5.0 \
     # via
     #   formulaic
     #   smart-open
-xgboost-cpu==3.3.0 \
+xgboost-cpu==3.3.0 ; platform_machine != "s390x" and platform_machine != "ppc64le" \
     --hash=sha256:14e4cd0266ff857380d00a312027bc401ebd2653ee01340cf093bb4a787f50a1 \
     --hash=sha256:d3c38ebf29184e98ec1ada20d6b58c6052b15a92cf31cb0e37b5584c78b9150a
-    # via autogluon-tabular
+    # via
+    #   -r requirements.in
+    #   autogluon-tabular
 yarl==1.25.1 \
     --hash=sha256:069576fa26443978d5d7744f48a5ae0a192945f00f75cc8941a631d98f7de0c3 \
     --hash=sha256:21b8b5af63bb30900eb537d3f8503feb761bbb8216af40e4bd377e949b185b7c \
