@@ -1,10 +1,10 @@
 --index-url https://packages.redhat.com/api/pypi/public-rhai/cpu-torch2.13-el9.8-test/simple
 
-autogluon.common @ https://github.com/DorotaDR/autogluon/archive/refs/tags/v1.6.3+dev0.tar.gz#subdirectory=common
-autogluon.core @ https://github.com/DorotaDR/autogluon/archive/refs/tags/v1.6.3+dev0.tar.gz#subdirectory=core
-autogluon.features @ https://github.com/DorotaDR/autogluon/archive/refs/tags/v1.6.3+dev0.tar.gz#subdirectory=features
-autogluon.tabular[lightgbm,xgboost,tabm,fastai] @ https://github.com/DorotaDR/autogluon/archive/refs/tags/v1.6.3+dev0.tar.gz#subdirectory=tabular
-autogluon.timeseries @ https://github.com/DorotaDR/autogluon/archive/refs/tags/v1.6.3+dev0.tar.gz#subdirectory=timeseries
+
+tensorboard-data-server @ https://packages.redhat.com/api/pulp-content/public-rhai/rhoai/3.6/cpu-ubi9-test/tensorboard_data_server-0.7.2-2-py3-none-any.whl#sha256=130cff9638dab874f85c86c6be2416d494fc9967c1e13f6ad914f5a52c24f5e1 # Workaround for RHAI-6487
+xgboost-cpu; platform_machine != "s390x" and platform_machine != "ppc64le" # Workaround for RHAI-6487
+autogluon.tabular[lightgbm,xgboost,tabm,fastai]==1.6.3+rhaiv.1
+autogluon.timeseries==1.6.3+rhaiv.1
 boto3
 mlflow-skinny~=3.16.0
 pandas==2.2.3
