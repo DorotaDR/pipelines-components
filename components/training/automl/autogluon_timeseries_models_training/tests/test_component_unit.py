@@ -225,8 +225,13 @@ class TestTimeseriesModelsTrainingUnitTests:
         assert result.model_config["refit_time_limit_per_model"] == 300
         assert result.model_config["known_covariates_names"] == []
         assert result.model_config["num_models_trained"] == 3
+        excluded_models = ["Chronos", "Chronos2", "Toto", "Toto2"]
+        assert mock_predictor.fit.call_args.kwargs["excluded_model_types"] == excluded_models
         assert mock_refit_predictor.fit.call_count == 2
         assert all(call.kwargs["time_limit"] == 300 for call in mock_refit_predictor.fit.call_args_list)
+        assert all(
+            call.kwargs["excluded_model_types"] == excluded_models for call in mock_refit_predictor.fit.call_args_list
+        )
         # Verify full refit happened
         assert "model_names" in models_artifact.metadata
         assert "context" in models_artifact.metadata

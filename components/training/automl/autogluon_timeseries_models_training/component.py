@@ -246,7 +246,7 @@ def autogluon_timeseries_models_training(
                 presets=PRESET_AG_NAMES[preset],
                 time_limit=time_limit,
                 # exclude deep learning models pretrained on large time series datasets
-                excluded_model_types=["Chronos", "Toto", "Chronos2"],
+                excluded_model_types=["Chronos", "Chronos2", "Toto", "Toto2"],
             )
         except Exception as e:
             logger.error(f"Training failed: {str(e)}")
@@ -478,7 +478,7 @@ def autogluon_timeseries_models_training(
                         train_data=full_train_ts_df,
                         **additional_fit_params,
                         time_limit=refit_time_limit,
-                        excluded_model_types=["Chronos", "Chronos2", "Toto"],
+                        excluded_model_types=["Chronos", "Chronos2", "Toto", "Toto2"],
                     )
                     total_fit_time_seconds += time.perf_counter() - refit_start_time
                     metrics = predictor_refit.evaluate(test_ts, metrics=list(AVAILABLE_METRICS.keys()))
